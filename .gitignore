@@ -6,5 +6,8 @@ out/
 node_modules/
 *.db
 .superpowers/
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/hooks/**
 docs/superpowers/
