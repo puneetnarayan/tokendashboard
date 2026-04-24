@@ -81,13 +81,15 @@ def rolling_window_usage(db_path: Union[str, Path], hours: int) -> dict:
     cache_create; cache_read excluded because it's discounted and doesn't
     count against the rate-limit window in the same way).
     """
-    # Compute cutoff in Python as ISO-8601 with 'T' separator and 'Z' suffix
-    # so it sorts lexicographically against timestamps stored by the scanner.
-    # (SQLite's datetime('now', '-N hours') uses a space separator, which would
+    # Compute cutoff in Python as ISO-8601 with 'T' separator, 'Z' suffix,
+    # and millisecond precision — matching the format Claude's JSONL scanner
+    # stores verbatim. Lexicographic string comparison only works correctly
+    # when both sides use the exact same format.
+    # (SQLite's datetime('now', '-N hours') uses a space separator and would
     # compare incorrectly against 'T'-separated ISO strings.)
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=hours)
-    ).isoformat().replace("+00:00", "Z")
+    ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     sql = """
       SELECT
         COALESCE(SUM(input_tokens), 0)           AS input_tokens,
