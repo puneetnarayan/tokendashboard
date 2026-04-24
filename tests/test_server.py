@@ -115,6 +115,19 @@ class ServerTests(unittest.TestCase):
         body = json.loads(self._get("/api/alerts"))
         self.assertIsInstance(body, list)
 
+    def test_quota_config_post_rejects_unknown_key(self):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/api/quota/config",
+            data=json.dumps({"some_garbage": "foo"}).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(req).read()
+            self.fail("expected HTTPError")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

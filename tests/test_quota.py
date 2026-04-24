@@ -47,6 +47,10 @@ class QuotaConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             set_quota_config(self.db, quota_5h=500)  # below min 1_000
 
+    def test_unknown_key_rejected(self):
+        with self.assertRaises(ValueError):
+            set_quota_config(self.db, unknown_field="foo")
+
 
 from datetime import datetime, timedelta, timezone
 from token_dashboard.quota import rolling_window_usage

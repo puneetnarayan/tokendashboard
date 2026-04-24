@@ -23,6 +23,12 @@ ALERT_DEFAULTS = {
 _QUOTA_MIN = 1_000
 _QUOTA_MAX = 100_000_000
 
+_ALLOWED_KEYS = {
+    "plan",
+    "quota_5h", "quota_weekly",
+    "alert_pct_5h", "alert_pct_weekly", "alert_pct_session",
+}
+
 
 def _get_kv(db_path: Union[str, Path], key: str, default=None):
     with connect(db_path) as c:
@@ -56,6 +62,9 @@ def get_quota_config(db_path: Union[str, Path]) -> dict:
 
 def set_quota_config(db_path: Union[str, Path], **kwargs) -> None:
     # Validate first, upsert after (all-or-nothing)
+    unknown = set(kwargs) - _ALLOWED_KEYS
+    if unknown:
+        raise ValueError(f"unknown config keys: {sorted(unknown)}")
     if "plan" in kwargs:
         if kwargs["plan"] not in PLAN_DEFAULTS:
             raise ValueError(f"unknown plan: {kwargs['plan']}")

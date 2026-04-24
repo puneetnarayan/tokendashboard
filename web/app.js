@@ -151,7 +151,11 @@ async function refreshBanner() {
     }
     const top = alerts.find(a => a.level === 'critical') || alerts[0];
     el.className = 'alert-banner ' + top.level;
-    el.innerHTML = `<strong>${top.level === 'critical' ? '⛔' : '⚠'} ${top.message}</strong>`;
+    const icon = top.level === 'critical' ? '⛔' : '⚠';
+    el.textContent = '';
+    const strong = document.createElement('strong');
+    strong.textContent = `${icon} ${top.message}`;
+    el.appendChild(strong);
     el.classList.remove('hidden');
   } catch (e) {
     // Silent fail; banner stays hidden.
