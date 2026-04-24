@@ -255,6 +255,10 @@ Expected: 2 new tests fail with `ImportError: cannot import name 'rolling_window
 
 - [ ] **Step 3: Add `rolling_window_usage` to `quota.py`**
 
+Ensure `datetime, timedelta, timezone` are imported at the top of `quota.py`
+(from the standard `datetime` module) — they are needed for computing the
+cutoff timestamp in Python.
+
 Append to `token_dashboard/quota.py`:
 
 ```python
@@ -265,6 +269,15 @@ def rolling_window_usage(db_path: Union[str, Path], hours: int) -> dict:
     cache_create; cache_read excluded because it's discounted and doesn't
     count against the rate-limit window in the same way).
     """
+    # Compute cutoff in Python as ISO-8601 with 'T' separator, 'Z' suffix,
+    # and millisecond precision — matching the format Claude's JSONL scanner
+    # stores verbatim. Lexicographic string comparison only works correctly
+    # when both sides use the exact same format.
+    # (SQLite's datetime('now', '-N hours') uses a space separator and would
+    # compare incorrectly against 'T'-separated ISO strings.)
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=hours)
+    ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     sql = """
       SELECT
         COALESCE(SUM(input_tokens), 0)           AS input_tokens,
@@ -274,10 +287,10 @@ def rolling_window_usage(db_path: Union[str, Path], hours: int) -> dict:
         COALESCE(SUM(cache_create_1h_tokens), 0) AS cache_create_1h_tokens
       FROM messages
       WHERE type = 'assistant'
-        AND timestamp > datetime('now', ?)
+        AND timestamp > ?
     """
     with connect(db_path) as c:
-        row = c.execute(sql, (f"-{hours} hours",)).fetchone()
+        row = c.execute(sql, (cutoff,)).fetchone()
     out = dict(row)
     out["total_billable"] = (
         out["input_tokens"]
@@ -524,6 +537,14 @@ CRITICAL_OFFSET_PCT = 15  # threshold + 15pp → critical
 
 def _current_session_tokens(db_path) -> int:
     """Billable tokens for most recent session with activity in last 2 hours."""
+    # See quota.rolling_window_usage — must compute cutoff in Python as
+    # ISO-8601 with 'T' separator + 'Z' suffix so it compares lexicographically
+    # against stored timestamps. SQLite datetime('now', ...) uses a space
+    # separator and would give wrong results.
+    from datetime import datetime, timedelta, timezone
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=2)
+    ).isoformat().replace("+00:00", "Z")
     sql = """
       SELECT
         COALESCE(SUM(input_tokens), 0)
@@ -534,12 +555,12 @@ def _current_session_tokens(db_path) -> int:
       WHERE type = 'assistant'
         AND session_id = (
           SELECT session_id FROM messages
-          WHERE timestamp > datetime('now', '-2 hours')
+          WHERE timestamp > ?
           ORDER BY timestamp DESC LIMIT 1
         )
     """
     with connect(db_path) as c:
-        row = c.execute(sql).fetchone()
+        row = c.execute(sql, (cutoff,)).fetchone()
     return row["total"] if row else 0
 
 
