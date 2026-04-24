@@ -231,3 +231,31 @@ hr.divider { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
   .glossary dl { grid-template-columns: 1fr; gap: 4px 0; }
   .glossary dt { margin-top: 10px; }
 }
+
+/* Alert banner */
+.alert-banner {
+  padding: 10px 16px;
+  font-size: 14px;
+  border-bottom: 1px solid rgba(0,0,0,0.1);
+}
+.alert-banner.hidden { display: none; }
+.alert-banner.warning { background: #fff4d6; color: #7a5200; border-color: #e8c569; }
+.alert-banner.critical { background: #fde2e1; color: #8a1c1a; border-color: #e89c99; }
+
+/* Progress bar */
+.progress-row { display: flex; align-items: center; gap: 12px; margin: 8px 0 16px; }
+.progress-bar { flex: 1; height: 16px; background: #eee; border-radius: 8px; overflow: hidden; position: relative; }
+.progress-fill { height: 100%; background: #4caf50; transition: width 0.3s; }
+.progress-bar.warning .progress-fill { background: #f5a623; }
+.progress-bar.critical .progress-fill { background: #e53935; }
+.progress-label { min-width: 220px; text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+
+/* Settings card */
+.settings-card { display: grid; gap: 10px; max-width: 500px; padding: 16px; background: #fafafa; border: 1px solid #e0e0e0; border-radius: 6px; margin-top: 20px; }
+.settings-card label { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; }
+.settings-card input, .settings-card select { flex: 0 0 180px; padding: 4px 6px; font-family: inherit; }
+.settings-card button { width: 100px; padding: 6px; cursor: pointer; }
+#quota-save-status { font-size: 13px; color: #666; }
+
+.quota-window { margin-bottom: 24px; }
+.quota-window h3 { margin: 0 0 6px; font-size: 14px; color: #555; }
