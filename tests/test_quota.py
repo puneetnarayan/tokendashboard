@@ -48,5 +48,41 @@ class QuotaConfigTests(unittest.TestCase):
             set_quota_config(self.db, quota_5h=500)  # below min 1_000
 
 
+from datetime import datetime, timedelta, timezone
+from token_dashboard.quota import rolling_window_usage
+
+
+class RollingWindowTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "q.db")
+        init_db(self.db)
+        now = datetime.now(timezone.utc)
+        inside = (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+        outside = (now - timedelta(hours=10)).isoformat().replace("+00:00", "Z")
+        from token_dashboard.db import connect
+        with connect(self.db) as c:
+            c.executescript(f"""
+            INSERT INTO messages (uuid, session_id, project_slug, type, timestamp, model,
+              input_tokens, output_tokens, cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens)
+            VALUES
+              ('a1','s1','p','assistant','{inside}','claude-opus-4-7',100,50,0,0,0),
+              ('a2','s1','p','assistant','{inside}','claude-opus-4-7',0,0,0,200,0),
+              ('a3','s1','p','assistant','{outside}','claude-opus-4-7',9999,9999,0,0,0);
+            """)
+            c.commit()
+
+    def test_5h_window_excludes_old_rows(self):
+        u = rolling_window_usage(self.db, hours=5)
+        self.assertEqual(u["input_tokens"], 100)
+        self.assertEqual(u["output_tokens"], 50)
+        self.assertEqual(u["cache_create_5m_tokens"], 200)
+        self.assertEqual(u["total_billable"], 100 + 50 + 200)
+
+    def test_weekly_window_includes_old_rows(self):
+        u = rolling_window_usage(self.db, hours=168)
+        self.assertEqual(u["input_tokens"], 100 + 9999)
+
+
 if __name__ == "__main__":
     unittest.main()

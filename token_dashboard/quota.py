@@ -1,6 +1,7 @@
 """Plan quota: config KV helpers, defaults, rolling window queries."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Union
 
@@ -71,3 +72,40 @@ def set_quota_config(db_path: Union[str, Path], **kwargs) -> None:
 
     for k, v in kwargs.items():
         _set_kv(db_path, k, v)
+
+
+def rolling_window_usage(db_path: Union[str, Path], hours: int) -> dict:
+    """Tokens used in last `hours` hours, across all sessions.
+
+    Returns dict with per-category tokens + total_billable (input + output +
+    cache_create; cache_read excluded because it's discounted and doesn't
+    count against the rate-limit window in the same way).
+    """
+    # Compute cutoff in Python as ISO-8601 with 'T' separator and 'Z' suffix
+    # so it sorts lexicographically against timestamps stored by the scanner.
+    # (SQLite's datetime('now', '-N hours') uses a space separator, which would
+    # compare incorrectly against 'T'-separated ISO strings.)
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=hours)
+    ).isoformat().replace("+00:00", "Z")
+    sql = """
+      SELECT
+        COALESCE(SUM(input_tokens), 0)           AS input_tokens,
+        COALESCE(SUM(output_tokens), 0)          AS output_tokens,
+        COALESCE(SUM(cache_read_tokens), 0)      AS cache_read_tokens,
+        COALESCE(SUM(cache_create_5m_tokens), 0) AS cache_create_5m_tokens,
+        COALESCE(SUM(cache_create_1h_tokens), 0) AS cache_create_1h_tokens
+      FROM messages
+      WHERE type = 'assistant'
+        AND timestamp > ?
+    """
+    with connect(db_path) as c:
+        row = c.execute(sql, (cutoff,)).fetchone()
+    out = dict(row)
+    out["total_billable"] = (
+        out["input_tokens"]
+        + out["output_tokens"]
+        + out["cache_create_5m_tokens"]
+        + out["cache_create_1h_tokens"]
+    )
+    return out
