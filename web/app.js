@@ -138,3 +138,25 @@ async function boot() {
 }
 
 boot();
+
+async function refreshBanner() {
+  const el = document.getElementById('alert-banner');
+  if (!el) return;
+  try {
+    const alerts = await api('/api/alerts');
+    if (!alerts.length) {
+      el.classList.add('hidden');
+      el.innerHTML = '';
+      return;
+    }
+    const top = alerts.find(a => a.level === 'critical') || alerts[0];
+    el.className = 'alert-banner ' + top.level;
+    el.innerHTML = `<strong>${top.level === 'critical' ? '⛔' : '⚠'} ${top.message}</strong>`;
+    el.classList.remove('hidden');
+  } catch (e) {
+    // Silent fail; banner stays hidden.
+  }
+}
+
+refreshBanner();
+setInterval(refreshBanner, 30_000);
