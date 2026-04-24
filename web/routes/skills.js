@@ -28,7 +28,7 @@ function sinceIso(range) {
 export default async function (root) {
   const range = readRange();
   const since = sinceIso(range);
-  const url = '/api/skills' + (since ? '?since=' + encodeURIComponent(since) : '');
+  const url = '/api/skills_cost' + (since ? '?since=' + encodeURIComponent(since) : '');
   const skills = await api(url);
 
   const totalInvocations = skills.reduce((s, r) => s + r.invocations, 0);
@@ -59,12 +59,13 @@ export default async function (root) {
 
     <div class="card" style="margin-top:16px">
       <h3>All skills</h3>
-      <p class="muted" style="margin:-4px 0 14px;font-size:12px">"Tokens per call" is the size of the skill's <code>SKILL.md</code> file — what Claude Code loads into context each time the skill is invoked.</p>
+      <p class="muted" style="margin:-4px 0 14px;font-size:12px">"Tokens per call" = skill SKILL.md size. "Proxy tokens" = invocations × tokens per call. Proxy excludes downstream tool calls triggered by the skill.</p>
       <table>
         <thead><tr>
           <th>skill</th>
           <th class="num">invocations</th>
           <th class="num">tokens per call</th>
+          <th class="num">proxy tokens</th>
           <th class="num">sessions</th>
           <th>last used</th>
         </tr></thead>
@@ -73,10 +74,11 @@ export default async function (root) {
             <tr>
               <td><span class="badge">${fmt.htmlSafe(s.skill)}</span></td>
               <td class="num">${fmt.int(s.invocations)}</td>
-              <td class="num">${s.tokens_per_call == null ? '<span class="muted">—</span>' : fmt.int(s.tokens_per_call)}</td>
+              <td class="num">${s.chars == null ? '<span class="muted">—</span>' : fmt.int(Math.floor(s.chars / 4))}</td>
+              <td class="num">${s.proxy_tokens == null ? '<span class="muted">—</span>' : fmt.int(s.proxy_tokens)}</td>
               <td class="num">${fmt.int(s.sessions)}</td>
               <td class="mono">${fmt.ts(s.last_used)}</td>
-            </tr>`).join('') || '<tr><td colspan="5" class="muted">no skills invoked in this range</td></tr>'}
+            </tr>`).join('') || '<tr><td colspan="6" class="muted">no skills invoked in this range</td></tr>'}
         </tbody>
       </table>
     </div>
