@@ -6,8 +6,15 @@ import os
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
-from token_dashboard.db import init_db, default_db_path, overview_totals
+from token_dashboard.db import (
+    default_claude_dir,
+    default_db_path,
+    get_setting,
+    init_db,
+    overview_totals,
+)
 from token_dashboard.scanner import scan_dir
 from token_dashboard.tips import all_tips
 
@@ -16,12 +23,19 @@ def _db_path(args) -> str:
     return args.db or os.environ.get("TOKEN_DASHBOARD_DB") or str(default_db_path())
 
 
-def _projects(args) -> str:
-    return (
-        args.projects_dir
-        or os.environ.get("CLAUDE_PROJECTS_DIR")
-        or str(Path.home() / ".claude" / "projects")
-    )
+def _projects_override(args) -> Optional[str]:
+    return args.projects_dir or os.environ.get("CLAUDE_PROJECTS_DIR")
+
+
+def _projects(args, db_path: Optional[str] = None) -> str:
+    override = _projects_override(args)
+    if override:
+        return override
+    if db_path:
+        claude_dir = get_setting(db_path, "claude_dir")
+        if claude_dir:
+            return str(Path(claude_dir).expanduser() / "projects")
+    return str(default_claude_dir() / "projects")
 
 
 def _today_range():
@@ -34,7 +48,7 @@ def _today_range():
 def cmd_scan(args):
     db = _db_path(args)
     init_db(db)
-    n = scan_dir(_projects(args), db)
+    n = scan_dir(_projects(args, db), db)
     print(f"Token Dashboard: scanned {n['files']} files, {n['messages']} messages, {n['tools']} tool calls")
 
 
@@ -74,7 +88,7 @@ def cmd_dashboard(args):
     db = _db_path(args)
     init_db(db)
     if not args.no_scan:
-        scan_dir(_projects(args), db)
+        scan_dir(_projects(args, db), db)
     from token_dashboard.server import run
 
     host = os.environ.get("HOST", "127.0.0.1")
@@ -83,7 +97,7 @@ def cmd_dashboard(args):
     if not args.no_open:
         webbrowser.open(url)
     print(f"Token Dashboard listening on {url}")
-    run(host, port, db, _projects(args))
+    run(host, port, db, _projects_override(args))
 
 
 def main():
@@ -101,6 +115,7 @@ def main():
     d.add_argument("--no-scan", action="store_true")
     d.add_argument("--no-open", action="store_true")
     d.set_defaults(func=cmd_dashboard)
+
     args = p.parse_args()
     args.func(args)
 
