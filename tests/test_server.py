@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 
 from token_dashboard.db import init_db
@@ -74,6 +75,45 @@ class ServerTests(unittest.TestCase):
         with urllib.request.urlopen(req) as resp:
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.read(), b"")
+
+    def test_quota_get_returns_config_and_usage(self):
+        body = json.loads(self._get("/api/quota"))
+        self.assertIn("config", body)
+        self.assertIn("usage_5h", body)
+        self.assertIn("usage_weekly", body)
+        self.assertIn("quota_5h", body["config"])
+
+    def test_quota_config_post_persists(self):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/api/quota/config",
+            data=json.dumps({"alert_pct_5h": 60}).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req).read()
+        body = json.loads(self._get("/api/quota"))
+        self.assertEqual(body["config"]["alert_pct_5h"], 60)
+
+    def test_quota_config_post_rejects_invalid(self):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/api/quota/config",
+            data=json.dumps({"alert_pct_5h": 200}).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(req).read()
+            self.fail("expected HTTPError")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 400)
+
+    def test_skills_cost_returns_list(self):
+        body = json.loads(self._get("/api/skills_cost"))
+        self.assertIsInstance(body, list)
+
+    def test_alerts_returns_list(self):
+        body = json.loads(self._get("/api/alerts"))
+        self.assertIsInstance(body, list)
 
 
 if __name__ == "__main__":

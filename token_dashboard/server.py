@@ -19,6 +19,9 @@ from .pricing import load_pricing, cost_for, get_plan, set_plan
 from .tips import all_tips, dismiss_tip
 from .scanner import scan_dir
 from .skills import cached_catalog
+from .quota import get_quota_config, set_quota_config, rolling_window_usage
+from .skill_tokens import skill_cost_proxy
+from .alerts import evaluate_alerts
 
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -141,6 +144,17 @@ def build_handler(db_path: str, projects_dir: str):
                 return _send_json(self, all_tips(db_path))
             if path == "/api/plan":
                 return _send_json(self, {"plan": get_plan(db_path), "pricing": pricing})
+            if path == "/api/quota":
+                cfg = get_quota_config(db_path)
+                return _send_json(self, {
+                    "config": cfg,
+                    "usage_5h": rolling_window_usage(db_path, hours=5),
+                    "usage_weekly": rolling_window_usage(db_path, hours=24 * 7),
+                })
+            if path == "/api/skills_cost":
+                return _send_json(self, skill_cost_proxy(db_path, since, until))
+            if path == "/api/alerts":
+                return _send_json(self, evaluate_alerts(db_path))
             if path == "/api/scan":
                 n = scan_dir(projects_dir, db_path)
                 return _send_json(self, n)
@@ -184,6 +198,12 @@ def build_handler(db_path: str, projects_dir: str):
             if url.path == "/api/tips/dismiss":
                 dismiss_tip(db_path, body.get("key", ""))
                 return _send_json(self, {"ok": True})
+            if url.path == "/api/quota/config":
+                try:
+                    set_quota_config(db_path, **body)
+                except ValueError as e:
+                    return _send_error(self, 400, str(e))
+                return _send_json(self, get_quota_config(db_path))
             self.send_response(404)
             self.end_headers()
 
