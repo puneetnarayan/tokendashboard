@@ -19,6 +19,7 @@ from typing import Optional, Union
 from .db import connect
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 USER_AGENT = "claude-cli/2.1.111 (cli, native)"
@@ -170,9 +171,64 @@ def _fetch_usage_raw(token: str) -> dict:
         raise PlanUsageError(f"Usage fetch network error: {e}")
 
 
+def _fetch_profile_raw(token: str) -> dict:
+    req = urllib.request.Request(
+        PROFILE_URL,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "User-Agent": USER_AGENT,
+            "Content-Type": "application/json",
+            "anthropic-beta": BETA_HEADER,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:500]
+        if e.code == 401:
+            raise PlanUsageError(f"401 unauthorized — token may be invalid: {body}")
+        raise PlanUsageError(f"Profile fetch failed (HTTP {e.code}): {body}")
+    except urllib.error.URLError as e:
+        raise PlanUsageError(f"Profile fetch network error: {e}")
+
+
+TIER_LABELS = {
+    "default_claude_max_5x": "Max (5x)",
+    "default_claude_max_20x": "Max (20x)",
+    "default_claude_pro": "Pro",
+    "claude_team": "Team",
+    "claude_enterprise": "Enterprise",
+}
+
+
+def tier_label(rate_limit_tier: Optional[str]) -> str:
+    if not rate_limit_tier:
+        return "Unknown plan"
+    return TIER_LABELS.get(rate_limit_tier, rate_limit_tier)
+
+
+def _fetch_combined(token: str) -> dict:
+    """Fetch usage + profile and return them under {usage, profile}.
+
+    profile failures don't break usage — we degrade by setting profile to None.
+    A 401 from EITHER call still propagates so the outer caller can refresh.
+    """
+    usage = _fetch_usage_raw(token)
+    try:
+        profile = _fetch_profile_raw(token)
+    except PlanUsageError as e:
+        if "401" in str(e):
+            raise
+        profile = None
+    return {"usage": usage, "profile": profile}
+
+
 def get_plan_usage(db_path: Union[str, Path], force: bool = False) -> dict:
-    """Return cached or fresh usage payload. Returns:
-        {"data": <usage payload>, "fetched_at": <ms epoch>, "cached": bool}
+    """Return cached or fresh usage+profile payload. Returns:
+        {"data": {"usage": <usage payload>, "profile": <profile payload>},
+         "fetched_at": <ms epoch>, "cached": bool}
     Raises PlanUsageError on hard failure (no creds, refresh failure).
     """
     last_ts_str = _kv_get(db_path, "pu_last_fetch_ts")
@@ -187,12 +243,12 @@ def get_plan_usage(db_path: Union[str, Path], force: bool = False) -> dict:
             }
     token = _get_valid_access_token(db_path)
     try:
-        data = _fetch_usage_raw(token)
+        data = _fetch_combined(token)
     except PlanUsageError as e:
         # On 401, try one refresh + retry
         if "401" in str(e):
             token = _refresh_token(db_path)
-            data = _fetch_usage_raw(token)
+            data = _fetch_combined(token)
         else:
             raise
     fetched_at = int(time.time() * 1000)
