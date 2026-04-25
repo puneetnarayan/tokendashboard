@@ -136,12 +136,6 @@ class ServerTests(unittest.TestCase):
         except urllib.error.HTTPError as e:
             self.assertIn(e.code, (502, 503))
 
-    def test_statusline_returns_current_and_history(self):
-        body = json.loads(self._get("/api/statusline"))
-        self.assertIn("current", body)
-        self.assertIn("history", body)
-        self.assertIsInstance(body["history"], list)
-
 
 if __name__ == "__main__":
     unittest.main()

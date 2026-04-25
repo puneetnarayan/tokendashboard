@@ -22,7 +22,6 @@ from .skills import cached_catalog
 from .quota import get_quota_config, set_quota_config, rolling_window_usage
 from .skill_tokens import skill_cost_proxy
 from .alerts import evaluate_alerts
-from .statusline import read_current_status, read_history
 from .plan_usage import get_plan_usage, reset_token_store, PlanUsageError, NoCredentialsError
 
 
@@ -157,11 +156,6 @@ def build_handler(db_path: str, projects_dir: str):
                 return _send_json(self, skill_cost_proxy(db_path, since, until))
             if path == "/api/alerts":
                 return _send_json(self, evaluate_alerts(db_path))
-            if path == "/api/statusline":
-                return _send_json(self, {
-                    "current": read_current_status(),
-                    "history": read_history(limit=200),
-                })
             if path == "/api/plan_usage":
                 force = qs.get("force", ["0"])[0] == "1"
                 try:
