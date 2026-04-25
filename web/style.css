@@ -259,3 +259,26 @@ hr.divider { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 
 .quota-window { margin-bottom: 24px; }
 .quota-window h3 { margin: 0 0 6px; font-size: 14px; color: #555; }
+
+/* Sparkline for context history */
+.sparkline {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 80px;
+  padding: 8px 0;
+}
+.spark-bar {
+  flex: 1;
+  min-width: 2px;
+  background: #4caf50;
+  border-radius: 1px;
+  transition: opacity 0.15s;
+}
+.spark-bar:hover { opacity: 0.7; }
+.spark-bar.warning { background: #f5a623; }
+.spark-bar.critical { background: #e53935; }
+
+.model-opus { color: #14b8a6; }
+.model-sonnet { color: #f97316; }
+.model-haiku { color: #ef4444; }

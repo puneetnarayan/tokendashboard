@@ -162,5 +162,7 @@ async function refreshBanner() {
   }
 }
 
-refreshBanner();
-setInterval(refreshBanner, 30_000);
+// Banner disabled — alerts feature was based on (now-deprecated) rolling-window heuristics.
+// Re-enable once /api/alerts is rewritten to use statusline data instead.
+// refreshBanner();
+// setInterval(refreshBanner, 30_000);

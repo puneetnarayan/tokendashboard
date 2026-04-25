@@ -1,86 +1,133 @@
 import { api, fmt } from '/web/app.js';
 
-const PLANS = ['pro', 'max', 'max-20x', 'api'];
+function modelClass(modelId) {
+  const s = (modelId || '').toLowerCase();
+  if (s.includes('opus'))   return 'opus';
+  if (s.includes('sonnet')) return 'sonnet';
+  if (s.includes('haiku'))  return 'haiku';
+  return '';
+}
 
-function progressBar(current, limit, alertPct) {
-  const pct = limit > 0 ? Math.min(100, (current / limit) * 100) : 0;
-  const over = pct >= alertPct;
-  const critical = pct >= alertPct + 15;
-  const cls = critical ? 'critical' : over ? 'warning' : 'ok';
+function modelLabel(payload) {
+  if (!payload?.model) return 'unknown';
+  return payload.model.display_name || payload.model.id || 'unknown';
+}
+
+function contextStats(payload) {
+  const cw = payload?.context_window;
+  if (!cw) return null;
+  const usage = cw.current_usage || {};
+  const input = usage.input_tokens || 0;
+  const cacheRead = usage.cache_read_input_tokens || 0;
+  const total = input + cacheRead;
+  // used_percentage is sometimes pre-calculated by Claude Code; trust it if present
+  const pct = typeof cw.used_percentage === 'number' ? cw.used_percentage : null;
+  return { input, cacheRead, total, pct };
+}
+
+function progressBar(pct, label) {
+  const safePct = pct == null ? 0 : Math.min(100, Math.max(0, pct));
+  const cls = safePct >= 70 ? 'critical' : safePct >= 50 ? 'warning' : 'ok';
   return `
     <div class="progress-row">
       <div class="progress-bar ${cls}">
-        <div class="progress-fill" style="width:${pct.toFixed(1)}%"></div>
+        <div class="progress-fill" style="width:${safePct.toFixed(1)}%"></div>
       </div>
-      <div class="progress-label">
-        ${fmt.int(current)} / ${fmt.int(limit)} (${pct.toFixed(0)}%)
-      </div>
+      <div class="progress-label">${label}</div>
     </div>
   `;
 }
 
-function settingsCard(cfg) {
-  const planOptions = PLANS.map(p =>
-    `<option value="${p}" ${p === cfg.plan ? 'selected' : ''}>${p}</option>`
-  ).join('');
+function noDataPanel() {
   return `
-    <form id="quota-settings" class="settings-card">
-      <h3>Settings</h3>
-      <label>Plan <select name="plan">${planOptions}</select></label>
-      <label>5h quota (tokens) <input name="quota_5h" type="number" value="${cfg.quota_5h}" min="1000" max="100000000"></label>
-      <label>Weekly quota (tokens) <input name="quota_weekly" type="number" value="${cfg.quota_weekly}" min="1000" max="100000000"></label>
-      <label>Alert at 5h (%) <input name="alert_pct_5h" type="number" value="${cfg.alert_pct_5h}" min="1" max="99"></label>
-      <label>Alert at weekly (%) <input name="alert_pct_weekly" type="number" value="${cfg.alert_pct_weekly}" min="1" max="99"></label>
-      <label>Alert per session (%) <input name="alert_pct_session" type="number" value="${cfg.alert_pct_session}" min="1" max="99"></label>
-      <button type="submit">Save</button>
-      <span id="quota-save-status"></span>
-    </form>
+    <div class="card">
+      <h3>No Claude Code activity captured yet</h3>
+      <p class="muted">
+        The dashboard mirrors what Claude Code's statusline reports. Run any
+        Claude Code prompt — the statusline hook (<code>~/.claude/context-status.sh</code>)
+        will write the JSON payload to <code>~/.claude/last-status.json</code> and the
+        dashboard will pick it up here.
+      </p>
+    </div>
+  `;
+}
+
+function renderCurrent(current) {
+  if (!current) return noDataPanel();
+  const stats = contextStats(current);
+  const model = modelLabel(current);
+  const mc = modelClass(current.model?.id);
+  const totalK = stats ? Math.round(stats.total / 1000) : 0;
+  const pct = stats?.pct;
+  const label = pct == null
+    ? `${fmt.int(stats?.total ?? 0)} tokens (no % from Claude)`
+    : `${pct.toFixed(0)}% — ${totalK}k tokens in context`;
+
+  return `
+    <section class="card">
+      <h3>Current context — <span class="badge model-${mc}">${fmt.htmlSafe(model)}</span></h3>
+      ${progressBar(pct, label)}
+      <p class="muted small" style="margin-top:8px">
+        Mirrored from Claude Code's statusline. Updates each turn.
+        Input tokens: ${fmt.int(stats?.input ?? 0)} ·
+        Cache read: ${fmt.int(stats?.cacheRead ?? 0)}
+      </p>
+    </section>
+  `;
+}
+
+function renderHistory(history) {
+  if (!history.length) return '';
+  // Build a simple sparkline-style bar chart of context % over time
+  const points = history
+    .map(e => {
+      const p = e.payload?.context_window;
+      const pct = typeof p?.used_percentage === 'number' ? p.used_percentage : null;
+      return { ts: e.ts, pct, model: e.payload?.model?.id };
+    })
+    .filter(p => p.pct != null);
+
+  if (!points.length) return '';
+
+  const max = Math.max(100, ...points.map(p => p.pct));
+  const bars = points.map(p => {
+    const h = (p.pct / max) * 100;
+    const cls = p.pct >= 70 ? 'critical' : p.pct >= 50 ? 'warning' : 'ok';
+    const title = `${(p.pct).toFixed(0)}% at ${p.ts.slice(11, 19)} (${(p.model || '').replace('claude-', '')})`;
+    return `<div class="spark-bar ${cls}" style="height:${h.toFixed(1)}%" title="${fmt.htmlSafe(title)}"></div>`;
+  }).join('');
+
+  return `
+    <section class="card" style="margin-top:16px">
+      <h3>Context fill — last ${points.length} turns</h3>
+      <div class="sparkline">${bars}</div>
+      <p class="muted small">Each bar = one turn. Hover for value.</p>
+    </section>
+  `;
+}
+
+function renderInfo() {
+  return `
+    <section class="card" style="margin-top:16px">
+      <h3>About this view</h3>
+      <p class="muted small">
+        This tab mirrors Claude Code's own context-window indicator (the same
+        data the statusline shows). It does <strong>not</strong> reflect your
+        Anthropic plan's 5-hour or weekly rate-limit quotas — those are
+        tracked by Anthropic, not exposed locally. Run <code>/status</code>
+        inside Claude Code for the authoritative plan-quota view.
+      </p>
+    </section>
   `;
 }
 
 export default async function (root) {
-  root.innerHTML = '<div class="loading">Loading quota…</div>';
-  const data = await api('/api/quota');
-  const { config, usage_5h, usage_weekly } = data;
-
+  root.innerHTML = '<div class="loading">Loading statusline mirror…</div>';
+  const data = await api('/api/statusline');
   root.innerHTML = `
-    <h2>Quota</h2>
-    <section class="quota-window">
-      <h3>5-hour rolling window</h3>
-      ${progressBar(usage_5h.total_billable, config.quota_5h, config.alert_pct_5h)}
-    </section>
-    <section class="quota-window">
-      <h3>7-day rolling window</h3>
-      ${progressBar(usage_weekly.total_billable, config.quota_weekly, config.alert_pct_weekly)}
-    </section>
-    <section>${settingsCard(config)}</section>
+    <h2>Context</h2>
+    ${renderCurrent(data.current)}
+    ${renderHistory(data.history || [])}
+    ${renderInfo()}
   `;
-
-  const form = root.querySelector('#quota-settings');
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = new FormData(form);
-    const payload = {};
-    for (const [k, v] of fd.entries()) {
-      payload[k] = k === 'plan' ? v : parseInt(v, 10);
-    }
-    const status = root.querySelector('#quota-save-status');
-    status.textContent = 'Saving…';
-    try {
-      const r = await fetch('/api/quota/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!r.ok) {
-        const err = await r.json();
-        status.textContent = 'Error: ' + (err.error || r.status);
-        return;
-      }
-      status.textContent = 'Saved.';
-      setTimeout(() => { location.reload(); }, 400);
-    } catch (err) {
-      status.textContent = 'Error: ' + err.message;
-    }
-  });
 }
