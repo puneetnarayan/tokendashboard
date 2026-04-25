@@ -128,6 +128,14 @@ class ServerTests(unittest.TestCase):
         except urllib.error.HTTPError as e:
             self.assertEqual(e.code, 400)
 
+    def test_plan_usage_returns_503_when_no_creds(self):
+        # No credentials available in test env — expect 503
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/plan_usage")
+            self.fail("expected HTTPError")
+        except urllib.error.HTTPError as e:
+            self.assertIn(e.code, (502, 503))
+
     def test_statusline_returns_current_and_history(self):
         body = json.loads(self._get("/api/statusline"))
         self.assertIn("current", body)

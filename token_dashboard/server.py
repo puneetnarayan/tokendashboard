@@ -23,6 +23,7 @@ from .quota import get_quota_config, set_quota_config, rolling_window_usage
 from .skill_tokens import skill_cost_proxy
 from .alerts import evaluate_alerts
 from .statusline import read_current_status, read_history
+from .plan_usage import get_plan_usage, reset_token_store, PlanUsageError, NoCredentialsError
 
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -161,6 +162,15 @@ def build_handler(db_path: str, projects_dir: str):
                     "current": read_current_status(),
                     "history": read_history(limit=200),
                 })
+            if path == "/api/plan_usage":
+                force = qs.get("force", ["0"])[0] == "1"
+                try:
+                    result = get_plan_usage(db_path, force=force)
+                    return _send_json(self, result)
+                except NoCredentialsError as e:
+                    return _send_error(self, 503, f"no credentials: {e}")
+                except PlanUsageError as e:
+                    return _send_error(self, 502, f"upstream error: {e}")
             if path == "/api/scan":
                 n = scan_dir(projects_dir, db_path)
                 return _send_json(self, n)

@@ -282,3 +282,19 @@ hr.divider { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 .model-opus { color: #14b8a6; }
 .model-sonnet { color: #f97316; }
 .model-haiku { color: #ef4444; }
+
+/* Plan usage rows */
+.plan-row {
+  display: grid;
+  grid-template-columns: 200px 1fr 180px;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+}
+.plan-label { color: #aaa; }
+.plan-bar { height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+.plan-fill { height: 100%; background: #3b82f6; transition: width 0.3s; }
+.plan-fill.warning { background: #f5a623; }
+.plan-fill.critical { background: #e53935; }
+.plan-pct { text-align: right; font-variant-numeric: tabular-nums; }
