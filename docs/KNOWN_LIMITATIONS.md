@@ -2,11 +2,11 @@
 
 None of these are blockers — the dashboard still gives you useful information. They're the rough edges you'll notice if you look hard.
 
-## Skills token counts are partial
+## Skills tokens-per-call is blank when a skill runs only through Task/Agent
 
-The Skills route shows every skill Claude Code invoked, how many times, across how many sessions, and when. The **tokens-per-call** column is populated only for skills whose `SKILL.md` lives under `~/.claude/skills/`, `~/.claude/scheduled-tasks/`, or `~/.claude/plugins/`. Skills registered elsewhere (project-local `.claude/skills/`, or invocations that go through the `Task` tool with a skill-shaped `subagent_type`) show invocation counts but leave the token column blank.
+The Skills route shows every skill Claude Code invoked, how many times, across how many sessions, and when. The **tokens-per-call** column is populated for every skill whose `SKILL.md` lives under `~/.claude/skills/`, `~/.claude/scheduled-tasks/`, `~/.claude/plugins/`, or a project-local `.claude/skills/` directory discovered from the cwds in your session history. A skill that runs only through the `Task`/`Agent` tool with a skill-shaped `subagent_type` (never as a direct `Skill` invocation) arrives without a resolvable slug on disk and its tokens-per-call stays blank.
 
-It's still a useful view — you can see which skills dominate your session time — just don't expect a complete per-skill token cost. PRs to broaden the catalog scan welcome.
+Cost attribution for orchestrator skills — any skill that dispatches subagents via `Task`/`Agent` — follows the `parent_uuid` chain from every dispatch back to the skill call that emitted it. The `total inc. subagents` column on the Skills tab reflects that. If you upgraded from an older build and the column looks low, run `python3 cli.py rescan-agent-targets` once to re-parse main-session JSONLs whose Agent rows lost their `subagent_type` target.
 
 ## Cost for Pro / Max / Max-20x users is shown as API-equivalent, not subscription value
 
