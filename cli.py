@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from token_dashboard.db import init_db, default_db_path, overview_totals
-from token_dashboard.scanner import scan_dir
+from token_dashboard.scanner import rescan_agent_targets, scan_dir
 from token_dashboard.tips import all_tips
 
 
@@ -36,6 +36,16 @@ def cmd_scan(args):
     init_db(db)
     n = scan_dir(_projects(args), db)
     print(f"Token Dashboard: scanned {n['files']} files, {n['messages']} messages, {n['tools']} tool calls")
+
+
+def cmd_rescan_agent_targets(args):
+    db = _db_path(args)
+    init_db(db)
+    n = rescan_agent_targets(db, _projects(args))
+    print(
+        f"Token Dashboard: reset {n['files_reset']} files, "
+        f"re-parsed {n['messages']} messages, {n['tools']} tool calls"
+    )
 
 
 def cmd_today(args):
@@ -94,6 +104,7 @@ def main():
     p = argparse.ArgumentParser(prog="token-dashboard", description="Local Claude Code usage dashboard", parents=[common])
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("scan",  parents=[common]).set_defaults(func=cmd_scan)
+    sub.add_parser("rescan-agent-targets", parents=[common]).set_defaults(func=cmd_rescan_agent_targets)
     sub.add_parser("today", parents=[common]).set_defaults(func=cmd_today)
     sub.add_parser("stats", parents=[common]).set_defaults(func=cmd_stats)
     sub.add_parser("tips",  parents=[common]).set_defaults(func=cmd_tips)

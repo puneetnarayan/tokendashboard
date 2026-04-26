@@ -59,24 +59,34 @@ export default async function (root) {
 
     <div class="card" style="margin-top:16px">
       <h3>All skills</h3>
-      <p class="muted" style="margin:-4px 0 14px;font-size:12px">"Tokens per call" is the size of the skill's <code>SKILL.md</code> file — what Claude Code loads into context each time the skill is invoked.</p>
+      <p class="muted" style="margin:-4px 0 14px;font-size:12px">"Tokens per call" is the size of the skill's <code>SKILL.md</code> file — what Claude Code loads into context each time. "Budget" / "p50 out" / "p95 out" track the skill's <strong>output</strong> footprint: budget is parsed from the <code>SKILL.md</code> body; p50/p95 sum <code>output_tokens</code> from the Skill call until the user types again or another Skill runs, excluding sidechain subagents. Note that <code>output_tokens</code> includes tool_use JSON, so a 2-5× gap over a text-only budget can be tool-call overhead. Red means p50 exceeds budget by more than 20%. "Total $" is the cost the skill itself emitted (input + output + cache) across this range. "Total inc. subagents" adds the cost of any <code>Task</code>/<code>Agent</code>-dispatched subagents whose parent chain traces back into the skill's window — use it to see orchestrator skills (anything that dispatches subagents) at their true weight.</p>
       <table>
         <thead><tr>
           <th>skill</th>
           <th class="num">invocations</th>
           <th class="num">tokens per call</th>
+          <th class="num">budget</th>
+          <th class="num">p50 out</th>
+          <th class="num">p95 out</th>
+          <th class="num">total $</th>
+          <th class="num">total inc. subagents</th>
           <th class="num">sessions</th>
           <th>last used</th>
         </tr></thead>
         <tbody>
-          ${skills.map(s => `
+          ${[...skills].sort((a, b) => ((b.total_with_subagents_usd ?? b.total_cost_usd) || 0) - ((a.total_with_subagents_usd ?? a.total_cost_usd) || 0)).map(s => `
             <tr>
               <td><span class="badge">${fmt.htmlSafe(s.skill)}</span></td>
               <td class="num">${fmt.int(s.invocations)}</td>
               <td class="num">${s.tokens_per_call == null ? '<span class="muted">—</span>' : fmt.int(s.tokens_per_call)}</td>
+              <td class="num">${s.budget_output_tokens == null ? '<span class="muted">—</span>' : fmt.int(s.budget_output_tokens)}</td>
+              <td class="num">${s.p50_output_tokens == null ? '<span class="muted">—</span>' : (s.over_budget ? `<span class="badge" style="background:#7a2e2e;color:#fff">${fmt.int(s.p50_output_tokens)}</span>` : fmt.int(s.p50_output_tokens))}</td>
+              <td class="num">${s.p95_output_tokens == null ? '<span class="muted">—</span>' : fmt.int(s.p95_output_tokens)}</td>
+              <td class="num">${s.total_cost_usd == null ? '<span class="muted">—</span>' : fmt.usd(s.total_cost_usd)}${s.cost_estimated ? '<span class="muted" title="pricing estimated from model tier">*</span>' : ''}</td>
+              <td class="num">${s.total_with_subagents_usd == null ? '<span class="muted">—</span>' : (s.subagent_cost_usd ? `<span title="own ${fmt.usd(s.total_cost_usd || 0)} + subagents ${fmt.usd(s.subagent_cost_usd)}">${fmt.usd(s.total_with_subagents_usd)}</span>` : fmt.usd(s.total_with_subagents_usd))}</td>
               <td class="num">${fmt.int(s.sessions)}</td>
               <td class="mono">${fmt.ts(s.last_used)}</td>
-            </tr>`).join('') || '<tr><td colspan="5" class="muted">no skills invoked in this range</td></tr>'}
+            </tr>`).join('') || '<tr><td colspan="10" class="muted">no skills invoked in this range</td></tr>'}
         </tbody>
       </table>
     </div>

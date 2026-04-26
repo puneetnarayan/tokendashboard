@@ -39,6 +39,7 @@ _TARGET_FIELDS = {
     "WebFetch":  "url",
     "WebSearch": "query",
     "Task":      "subagent_type",
+    "Agent":     "subagent_type",
     "Skill":     "skill",
 }
 
@@ -240,6 +241,45 @@ def scan_file(path: Path, project_slug: str, conn, start_byte: int = 0) -> dict:
             msgs += 1
             end_offset = line_end
     return {"messages": msgs, "tools": tools, "end_offset": end_offset}
+
+
+def rescan_agent_targets(
+    db_path: Union[str, Path],
+    projects_root: Union[str, Path],
+) -> dict:
+    """Re-parse main-session JSONLs that hold ``tool_name='Agent'`` rows with
+    ``target IS NULL``.
+
+    Older scanner builds recognised only the legacy ``Task`` tool name;
+    Claude Code renamed it to ``Agent``, leaving historical rows without a
+    subagent_type to join on. Resetting those files' ``bytes_read`` makes
+    the next ``scan_dir`` re-parse them end-to-end. Dedup is handled by
+    ``INSERT OR REPLACE`` on messages + ``DELETE FROM tool_calls`` per
+    uuid, so repeated runs are safe.
+
+    One-shot utility: wire in at operator time, not on every scan.
+    """
+    with connect(db_path) as conn:
+        sessions = [
+            r["session_id"] for r in conn.execute(
+                "SELECT DISTINCT session_id FROM tool_calls "
+                "WHERE tool_name='Agent' AND target IS NULL"
+            )
+        ]
+        if not sessions:
+            return {"files_reset": 0, "messages": 0, "tools": 0, "files": 0}
+        paths: set[str] = set()
+        for sid in sessions:
+            for row in conn.execute(
+                "SELECT path FROM files WHERE path LIKE ?",
+                (f"%/{sid}.jsonl",),
+            ):
+                paths.add(row["path"])
+        for p in paths:
+            conn.execute("UPDATE files SET bytes_read = 0 WHERE path = ?", (p,))
+        conn.commit()
+    result = scan_dir(projects_root, db_path)
+    return {"files_reset": len(paths), **result}
 
 
 def scan_dir(projects_root: Union[str, Path], db_path: Union[str, Path]) -> dict:

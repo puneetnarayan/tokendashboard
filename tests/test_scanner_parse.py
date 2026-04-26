@@ -42,6 +42,27 @@ class ToolExtractionTests(unittest.TestCase):
         self.assertEqual(parsed[0]["name"], "Read")
         self.assertEqual(parsed[1]["target"], "npm run lint")
 
+    def test_agent_and_task_both_populate_target(self):
+        """Claude Code renamed Task → Agent; both must resolve subagent_type as target."""
+        rec = {
+            "type": "assistant", "uuid": "u", "sessionId": "s", "timestamp": "t",
+            "message": {
+                "model": "claude-opus-4-7",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "Agent",
+                     "input": {"subagent_type": "software-architect", "description": "x"}},
+                    {"type": "tool_use", "id": "t2", "name": "Task",
+                     "input": {"subagent_type": "researcher", "description": "y"}},
+                ],
+            },
+        }
+        _, tools = parse_record(rec, project_slug="p")
+        self.assertEqual(len(tools), 2)
+        by_name = {t["tool_name"]: t for t in tools}
+        self.assertEqual(by_name["Agent"]["target"], "software-architect")
+        self.assertEqual(by_name["Task"]["target"], "researcher")
+
 
 class SidechainTests(unittest.TestCase):
     def test_is_sidechain_flag_propagates(self):
