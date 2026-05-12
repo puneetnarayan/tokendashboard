@@ -242,13 +242,23 @@ def scan_file(path: Path, project_slug: str, conn, start_byte: int = 0) -> dict:
     return {"messages": msgs, "tools": tools, "end_offset": end_offset}
 
 
-def scan_dir(projects_root: Union[str, Path], db_path: Union[str, Path]) -> dict:
+def scan_dir(projects_root: Union[str, Path], db_path: Union[str, Path],
+             progress=None) -> dict:
+    """Scan JSONL transcripts under *projects_root* into the DB.
+
+    *progress*, when provided, is called with ``(scanned, total, totals)``
+    after each file that has new data.  ``scanned`` is the number of files
+    processed so far, ``total`` is the total number of JSONL files found,
+    and ``totals`` is the running dict of messages/tools/files counts.
+    """
     root = Path(projects_root)
     totals = {"messages": 0, "tools": 0, "files": 0}
     if not root.is_dir():
         return totals
+    all_files = sorted(root.rglob("*.jsonl"))
+    total = len(all_files)
     with connect(db_path) as conn:
-        for p in root.rglob("*.jsonl"):
+        for p in all_files:
             try:
                 stat = p.stat()
             except OSError:
@@ -263,9 +273,6 @@ def scan_dir(projects_root: Union[str, Path], db_path: Union[str, Path]) -> dict
                 offset = row["bytes_read"]
             slug = _project_slug(p, root)
             sub = scan_file(p, slug, conn, start_byte=offset)
-            # Persist the byte offset of the last fully-parsed line (not
-            # st_size) so a partial line mid-flush is retried on the next
-            # scan instead of being skipped over.
             conn.execute(
                 "INSERT OR REPLACE INTO files (path, mtime, bytes_read, scanned_at) VALUES (?, ?, ?, ?)",
                 (str(p), stat.st_mtime, sub["end_offset"], time.time()),
@@ -273,5 +280,7 @@ def scan_dir(projects_root: Union[str, Path], db_path: Union[str, Path]) -> dict
             totals["messages"] += sub["messages"]
             totals["tools"]    += sub["tools"]
             totals["files"]    += 1
+            if progress:
+                progress(totals["files"], total, totals)
         conn.commit()
     return totals

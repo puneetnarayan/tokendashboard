@@ -31,11 +31,20 @@ def _today_range():
     return start, end
 
 
+def _scan_progress(scanned, total, totals):
+    print(
+        f"\r  scanning {scanned}/{total} files"
+        f"  ({totals['messages']} msgs, {totals['tools']} tools)",
+        end="", flush=True,
+    )
+
+
 def cmd_scan(args):
     db = _db_path(args)
     init_db(db)
-    n = scan_dir(_projects(args), db)
-    print(f"Token Dashboard: scanned {n['files']} files, {n['messages']} messages, {n['tools']} tool calls")
+    print("Token Dashboard: scanning…")
+    n = scan_dir(_projects(args), db, progress=_scan_progress)
+    print(f"\rToken Dashboard: scanned {n['files']} files, {n['messages']} messages, {n['tools']} tool calls")
 
 
 def cmd_today(args):
