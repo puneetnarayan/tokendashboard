@@ -64,6 +64,8 @@ export default async function (root) {
   const byKind = data.by_kind || [];
   const byEntrypoint = data.by_entrypoint || [];
   const sdkRuns = data.sdk_runs || [];
+  const tree = data.dispatch_tree || [];
+  const routing = data.tier_routing || { total_sessions: 0, routed_sessions: 0, routed_pct: 0, per_skill: [] };
 
   let totalMainMsgs = 0, totalCompactMsgs = 0, totalSubagentMsgs = 0;
   let totalSubagentCost = 0, totalCompactCost = 0;
@@ -92,9 +94,9 @@ export default async function (root) {
     </div>
 
     <div class="row cols-4">
+      <div class="card kpi ${routing.routed_pct < 10 ? '' : 'cost'}"><div class="label">Tier-routing applied</div><div class="value">${routing.routed_pct}%</div><div class="sub">${fmt.int(routing.routed_sessions)} of ${fmt.int(routing.total_sessions)} sessions invoked orchestrate / AEH / pareto-cascade</div></div>
       <div class="card kpi"><div class="label">Subagent share</div><div class="value">${subagentPct}</div><div class="sub">${fmt.int(totalSubagentMsgs)} Task-dispatched msgs</div></div>
-      <div class="card kpi"><div class="label">Auto-compaction msgs</div><div class="value">${fmt.int(totalCompactMsgs)}</div><div class="sub">${fmt.usd(totalCompactCost)} CC-internal overhead</div></div>
-      <div class="card kpi"><div class="label">Subagent cost (est.)</div><div class="value">${fmt.usd(totalSubagentCost)}</div></div>
+      <div class="card kpi"><div class="label">Subagent cost (est.)</div><div class="value">${fmt.usd(totalSubagentCost)}</div><div class="sub">vs auto-compact ${fmt.usd(totalCompactCost)}</div></div>
       <div class="card kpi"><div class="label">SDK orchestration runs</div><div class="value">${fmt.int(sdkSessions)}</div><div class="sub">${fmt.int(sdkMsgs)} msgs across ${sdkRuns.length} clusters</div></div>
     </div>
 
@@ -173,9 +175,46 @@ export default async function (root) {
     </div>
 
     <div class="card" style="margin-top:16px">
+      <h3>Dispatch tree — parent prompt → spawned subagent threads</h3>
+      <p class="muted" style="margin:-4px 0 14px;font-size:12px">
+        Each row is one <code>Agent</code> (formerly <code>Task</code>) tool call: the dispatcher model is the main thread that issued the dispatch; the child models are the subagent thread that ran. Reconstruction is via timing-join on session_id + first-sidechain-after-tool-call (~&lt;1s gap). Sort by total child token spend.
+      </p>
+      <table>
+        <thead><tr>
+          <th>dispatcher (main)</th>
+          <th>→</th>
+          <th>child (subagent)</th>
+          <th>subagent_type</th>
+          <th>session</th>
+          <th>workspace</th>
+          <th class="num">child msgs</th>
+          <th class="num">i/o tokens</th>
+          <th class="num">child cost</th>
+          <th>when</th>
+        </tr></thead>
+        <tbody>
+          ${tree.length === 0 ? '<tr><td colspan="10" class="muted">No Agent/Task dispatches in this range. (Total in DB: '+fmt.int(routing.total_sessions)+' sessions, but Agent tool may have been invoked rarely.)</td></tr>' : tree.map(t => `
+            <tr class="clickable" data-session="${fmt.htmlSafe(t.session_id)}">
+              <td><span class="badge model-${fmt.modelClass(t.dispatcher_model)}">${fmt.htmlSafe(fmt.modelShort(t.dispatcher_model || 'unknown'))}</span></td>
+              <td class="muted">→</td>
+              <td>${(t.models || []).map(m => `<span class="badge model-${fmt.modelClass(m)}">${fmt.htmlSafe(fmt.modelShort(m))}</span>`).join(' ')}</td>
+              <td class="mono" style="font-size:11px">${t.subagent_type ? fmt.htmlSafe(t.subagent_type) : '<span class="muted">—</span>'}</td>
+              <td class="mono" style="font-size:11px" title="${fmt.htmlSafe(t.session_id)}">${fmt.htmlSafe(t.session_id.slice(0, 8))}…</td>
+              <td>${fmt.htmlSafe(t.project_name || t.project_slug || '')}</td>
+              <td class="num">${fmt.int(t.thread_msgs)}</td>
+              <td class="num">${fmt.int(t.io_tokens)}</td>
+              <td class="num">${fmt.usd(t.child_cost_usd)}${t.child_cost_estimated ? ' <span class="muted">~</span>' : ''}</td>
+              <td class="mono" style="font-size:11px">${fmt.ts(t.dispatched_at)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      <p class="muted" style="margin:8px 0 0;font-size:11px"><em>Note:</em> subagent_type appears blank for older dispatches because the scanner mapping for the renamed <code>Agent</code> tool was missing before this build. New dispatches will populate it; to backfill, run <code>rm ~/.claude/token-dashboard.db &amp;&amp; python3 cli.py scan</code>.</p>
+    </div>
+
+    <div class="card" style="margin-top:16px">
       <h3>Top sessions by subagent token spend</h3>
       <p class="muted" style="margin:-4px 0 14px;font-size:12px">
-        Click a row to drill in. <em>Dispatch-tree caveat:</em> the parent-Opus→child-subagent linkage isn't reconstructable from the current Claude Code transcript schema (sidechain messages' <code>parent_uuid</code> points within the subagent thread, not back to the dispatching prompt). We surface aggregate model presence per session instead.
+        Click a row to drill into the session view.
       </p>
       <table>
         <thead><tr>

@@ -6,6 +6,7 @@ from token_dashboard.db import (
     init_db, connect,
     workspaces_matrix, cross_workspace_leaks,
     subagent_breakdown, top_subagent_sessions, orchestration_breakdown,
+    dispatch_tree, tier_routing_stats,
     _workspace_root_path, _build_workspace_index, _classify_path,
 )
 
@@ -293,6 +294,96 @@ class SubagentBreakdownTests(unittest.TestCase):
         self.assertEqual(tops[0]["session_id"], "s1")
         self.assertEqual(tops[0]["subagent_msgs"], 1)
         self.assertIn("claude-sonnet-4-6", tops[0]["models"])
+
+
+class DispatchTreeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "tree.db")
+        init_db(self.db)
+        with connect(self.db) as c:
+            # Main thread Opus assistant message that issues an Agent tool call.
+            c.execute(
+                "INSERT INTO messages (uuid, session_id, project_slug, type, "
+                "is_sidechain, timestamp, model, input_tokens, output_tokens) VALUES "
+                "('main1','s1','p','assistant',0,'2026-05-01T00:00:00Z','claude-opus-4-7',100,200)"
+            )
+            c.execute(
+                "INSERT INTO tool_calls (message_uuid, session_id, project_slug, "
+                "tool_name, target, timestamp, is_error) VALUES "
+                "('main1','s1','p','Agent','plan-architect','2026-05-01T00:00:00.500Z',0)"
+            )
+            # Subagent thread spawned right after — Sonnet, two msgs.
+            c.execute(
+                "INSERT INTO messages (uuid, session_id, project_slug, type, "
+                "is_sidechain, agent_id, timestamp, model, input_tokens, output_tokens) VALUES "
+                "('sub1','s1','p','user',1,'a-sonnet-1','2026-05-01T00:00:01Z','claude-sonnet-4-6',0,0)"
+            )
+            c.execute(
+                "INSERT INTO messages (uuid, session_id, project_slug, type, "
+                "is_sidechain, agent_id, timestamp, model, input_tokens, output_tokens) VALUES "
+                "('sub2','s1','p','assistant',1,'a-sonnet-1','2026-05-01T00:00:02Z','claude-sonnet-4-6',50,100)"
+            )
+            # Unrelated acompact subagent in same session — must be excluded.
+            c.execute(
+                "INSERT INTO messages (uuid, session_id, project_slug, type, "
+                "is_sidechain, agent_id, timestamp, model, input_tokens, output_tokens) VALUES "
+                "('sub3','s1','p','assistant',1,'acompact-zz','2026-05-01T00:00:05Z','claude-sonnet-4-6',10,20)"
+            )
+            c.commit()
+
+    def test_reconstructs_dispatcher_and_child_link(self):
+        rows = dispatch_tree(self.db)
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertEqual(r["dispatcher_model"], "claude-opus-4-7")
+        self.assertEqual(r["agent_id"], "a-sonnet-1")
+        self.assertEqual(r["subagent_type"], "plan-architect")
+        self.assertEqual(r["thread_msgs"], 1)  # only assistant msgs in agg
+        self.assertIn("claude-sonnet-4-6", r["models"])
+
+    def test_excludes_acompact_threads(self):
+        rows = dispatch_tree(self.db)
+        for r in rows:
+            self.assertFalse(r["agent_id"].startswith("acompact-"))
+
+
+class TierRoutingStatsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "tr.db")
+        init_db(self.db)
+        with connect(self.db) as c:
+            # 3 sessions; one invokes orchestrate, one invokes AEH, one nothing.
+            for sid in ("s1", "s2", "s3"):
+                c.execute(
+                    "INSERT INTO messages (uuid, session_id, project_slug, type, "
+                    "is_sidechain, timestamp, model) VALUES "
+                    f"('m_{sid}','{sid}','p','assistant',0,'2026-05-15T00:00:00Z','claude-opus-4-7')"
+                )
+            c.execute(
+                "INSERT INTO tool_calls (message_uuid, session_id, project_slug, "
+                "tool_name, target, timestamp, is_error) VALUES "
+                "('m_s1','s1','p','Skill','orchestrate','2026-05-15T00:00:01Z',0)"
+            )
+            c.execute(
+                "INSERT INTO tool_calls (message_uuid, session_id, project_slug, "
+                "tool_name, target, timestamp, is_error) VALUES "
+                "('m_s2','s2','p','Skill','agentic-efficiency-harness','2026-05-15T00:00:01Z',0)"
+            )
+            c.commit()
+
+    def test_counts_routed_vs_total_sessions(self):
+        stats = tier_routing_stats(self.db)
+        self.assertEqual(stats["total_sessions"], 3)
+        self.assertEqual(stats["routed_sessions"], 2)
+        self.assertAlmostEqual(stats["routed_pct"], 66.7, places=0)
+
+    def test_per_skill_invocation_count(self):
+        stats = tier_routing_stats(self.db)
+        skills = {s["skill"]: s for s in stats["per_skill"]}
+        self.assertEqual(skills["orchestrate"]["invocations"], 1)
+        self.assertEqual(skills["agentic-efficiency-harness"]["invocations"], 1)
 
 
 if __name__ == "__main__":

@@ -38,7 +38,11 @@ _TARGET_FIELDS = {
     "Bash":      "command",
     "WebFetch":  "url",
     "WebSearch": "query",
+    # Subagent dispatch — Claude Code renamed the tool from "Task" to "Agent"
+    # somewhere around the 4.x cutover; both keys map to the same input field
+    # so transcripts from either era populate target=subagent_type correctly.
     "Task":      "subagent_type",
+    "Agent":     "subagent_type",
     "Skill":     "skill",
 }
 

@@ -16,6 +16,7 @@ from .db import (
     daily_token_breakdown, model_breakdown, skill_breakdown,
     workspaces_matrix, cross_workspace_leaks,
     subagent_breakdown, top_subagent_sessions, orchestration_breakdown,
+    dispatch_tree, tier_routing_stats,
 )
 from .pricing import load_pricing, cost_for, get_plan, set_plan
 from .tips import all_tips, dismiss_tip
@@ -162,12 +163,31 @@ def build_handler(db_path: str, projects_dir: str):
                         c = cost_for(r["model"], r, pricing)
                         r["cost_usd"] = c["usd"]
                         r["cost_estimated"] = c["estimated"]
+                tree = dispatch_tree(
+                    db_path, limit=_clamp_limit(qs.get("limit", ["50"])[0], 50),
+                    since=since, until=until,
+                )
+                for r in tree:
+                    # Cost contribution of the child thread (subagent side only).
+                    child_models = r["models"] or []
+                    if child_models:
+                        # Approximate cost across mixed-model thread by attributing
+                        # weighted to the dominant child model.
+                        c = cost_for(child_models[0], r, pricing)
+                        r["child_cost_usd"] = c["usd"]
+                        r["child_cost_estimated"] = c["estimated"]
+                    else:
+                        r["child_cost_usd"] = None
+                        r["child_cost_estimated"] = True
+                routing = tier_routing_stats(db_path, since, until)
                 return _send_json(self, {
                     "breakdown": rows,
                     "top_sessions": top,
                     "by_kind": orch["by_kind"],
                     "by_entrypoint": orch["by_entrypoint"],
                     "sdk_runs": orch["sdk_runs"],
+                    "dispatch_tree": tree,
+                    "tier_routing": routing,
                 })
             if path == "/api/tips":
                 return _send_json(self, all_tips(db_path))

@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from .db import connect, cross_workspace_leaks
+from .db import connect, cross_workspace_leaks, tier_routing_stats
 
 
 def _iso_days_ago(today_iso: str, n: int) -> str:
@@ -214,6 +214,51 @@ def cross_workspace_tips(db_path, today_iso: Optional[str] = None) -> List[dict]
     return out
 
 
+def tier_routing_gap_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
+    """Flag heavy Opus main-thread spend without commensurate tier-routing.
+
+    Fires when in the past 7d:
+    - Opus main-thread input+output exceeds ~3M tokens (a non-trivial spend), AND
+    - tier-routing skill invocation rate is below 10% of sessions.
+
+    Suggests either invoking /orchestrate proactively or wiring it into the
+    project's CLAUDE.md so the assistant routes by default.
+    """
+    today_iso = today_iso or datetime.utcnow().isoformat()
+    since = _iso_days_ago(today_iso, 7)
+    with connect(db_path) as c:
+        row = c.execute(
+            """SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS io_tok
+                 FROM messages
+                WHERE type='assistant' AND is_sidechain=0
+                  AND model LIKE '%opus%' AND timestamp >= ?""",
+            (since,),
+        ).fetchone()
+    opus_main_io = (row["io_tok"] or 0) if row else 0
+    if opus_main_io < 3_000_000:
+        return []
+    stats = tier_routing_stats(db_path, since=since)
+    if (stats.get("routed_pct") or 0) >= 10:
+        return []
+    key = _key("tier-routing-gap", "opus-heavy-no-routing-7d")
+    if _is_dismissed(db_path, key):
+        return []
+    return [{
+        "key": key, "category": "tier-routing-gap",
+        "title": f"Opus main thread used {opus_main_io:,} tokens in 7d, tier-routing only {stats['routed_pct']}% of sessions",
+        "body": (
+            f"Most of your spend is going to Opus on the main thread "
+            f"({stats['routed_sessions']} of {stats['total_sessions']} sessions invoked an "
+            f"orchestrate/AEH/pareto-cascade skill). AEH benchmarks claim ~80% cost "
+            f"reduction when tier-routing decomposes the work; without explicit invocation "
+            f"or a CLAUDE.md auto-orchestration policy, the routing skills don't fire on "
+            f"their own. Options: (1) invoke /orchestrate at the start of non-trivial tasks; "
+            f"(2) add an 'auto-orchestration' rule to ~/.claude/CLAUDE.md."
+        ),
+        "scope": "opus-heavy-no-routing-7d",
+    }]
+
+
 def all_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
     return [
         *cache_discipline_tips(db_path, today_iso),
@@ -221,4 +266,5 @@ def all_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
         *right_size_tips(db_path, today_iso),
         *outlier_tips(db_path, today_iso),
         *cross_workspace_tips(db_path, today_iso),
+        *tier_routing_gap_tips(db_path, today_iso),
     ]
