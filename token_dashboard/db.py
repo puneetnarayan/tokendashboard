@@ -374,3 +374,222 @@ def model_breakdown(db_path, since=None, until=None) -> list:
     """
     with connect(db_path) as c:
         return [dict(r) for r in c.execute(sql, args)]
+
+
+# --- cross-workspace + subagent attribution -------------------------------
+
+
+def _workspace_root_path(cwd: str, slug: str) -> Optional[str]:
+    """Full ancestor path of cwd whose slug-encoding equals slug, or None.
+
+    Unlike _walk_to_root (returns basename), this returns the full path so the
+    caller can use it as a path prefix when classifying tool_call targets.
+    """
+    if not cwd or not slug:
+        return None
+    trimmed = cwd.rstrip("/\\")
+    sep = "\\" if "\\" in trimmed else "/"
+    parts = trimmed.split(sep)
+    for i in range(len(parts), 0, -1):
+        candidate = sep.join(parts[:i])
+        if _encode_slug(candidate) == slug:
+            return candidate
+    return None
+
+
+def _normalize_path(p: str) -> str:
+    """Lowercase, forward-slash-free, trailing-separator-stripped path for prefix matching."""
+    return (p or "").replace("/", "\\").lower().rstrip("\\")
+
+
+def _build_workspace_index(conn) -> list:
+    """List of (root_path_normalized, workspace_name) sorted by length desc.
+
+    Built once per request from distinct (cwd, project_slug) pairs. Used to
+    classify tool_call target paths into a workspace.
+    """
+    by_slug: dict = {}
+    for r in conn.execute(
+        "SELECT DISTINCT cwd, project_slug FROM messages "
+        "WHERE cwd IS NOT NULL AND project_slug IS NOT NULL"
+    ):
+        by_slug.setdefault(r["project_slug"], []).append(r["cwd"])
+    seen = set()
+    out = []
+    candidates = []
+    for slug, cwds in by_slug.items():
+        name = best_project_name(cwds, slug)
+        roots = set()
+        for cwd in cwds:
+            root = _workspace_root_path(cwd, slug)
+            roots.add(root or cwd.rstrip("/\\"))
+        for root in roots:
+            norm = _normalize_path(root)
+            if norm:
+                candidates.append((norm, name))
+    candidates.sort(key=lambda x: -len(x[0]))
+    for prefix, name in candidates:
+        if prefix in seen:
+            continue
+        seen.add(prefix)
+        out.append((prefix, name))
+    return out
+
+
+def _classify_path(path: str, index: list) -> str:
+    """Return workspace name for a path, or 'external' when no prefix matches."""
+    if not path:
+        return "external"
+    norm = _normalize_path(path)
+    for prefix, name in index:
+        if norm == prefix or norm.startswith(prefix + "\\"):
+            return name
+    return "external"
+
+
+_CROSS_WS_TOOLS = ("Read", "Edit", "Write", "NotebookEdit")
+
+
+def workspaces_matrix(db_path, since=None, until=None) -> dict:
+    """Cross-workspace tool-target flow data shaped for an ECharts Sankey.
+
+    Only Read/Edit/Write/NotebookEdit calls are counted — they uniquely
+    identify a file. Glob/Grep patterns are skipped (often workspace-free).
+    """
+    rng, args = _range_clause(since, until, col="t.timestamp")
+    sql = f"""
+      SELECT m.cwd AS src_cwd, m.project_slug AS src_slug,
+             t.target AS target, COUNT(*) AS n
+        FROM tool_calls t JOIN messages m ON t.message_uuid = m.uuid
+       WHERE t.tool_name IN ({",".join("?" * len(_CROSS_WS_TOOLS))})
+         AND t.target IS NOT NULL AND t.target != ''
+         AND m.cwd IS NOT NULL AND m.project_slug IS NOT NULL
+         {rng}
+       GROUP BY src_cwd, src_slug, target
+    """
+    nodes: set = set()
+    matrix: dict = {}
+    with connect(db_path) as c:
+        index = _build_workspace_index(c)
+        for row in c.execute(sql, (*_CROSS_WS_TOOLS, *args)):
+            src = project_name_for(row["src_cwd"], row["src_slug"]) or row["src_slug"] or "unknown"
+            dst = _classify_path(row["target"], index)
+            nodes.add(src); nodes.add(dst)
+            key = (src, dst)
+            matrix[key] = matrix.get(key, 0) + row["n"]
+    return {
+        "nodes": sorted(nodes),
+        "links": [{"source": s, "target": t, "value": v} for (s, t), v in matrix.items()],
+        "total_calls": sum(matrix.values()),
+        "tools_considered": list(_CROSS_WS_TOOLS),
+    }
+
+
+def cross_workspace_leaks(db_path, limit: int = 20, since=None, until=None) -> list:
+    """Top (src_workspace -> dst_workspace) pairs where src != dst.
+
+    Includes touched-session count and top files per pair so the UI can drill
+    into the actual repeat-read targets.
+    """
+    rng, args = _range_clause(since, until, col="t.timestamp")
+    sql = f"""
+      SELECT m.cwd AS src_cwd, m.project_slug AS src_slug,
+             m.session_id AS src_session, t.target AS target, COUNT(*) AS n
+        FROM tool_calls t JOIN messages m ON t.message_uuid = m.uuid
+       WHERE t.tool_name IN ({",".join("?" * len(_CROSS_WS_TOOLS))})
+         AND t.target IS NOT NULL AND t.target != ''
+         AND m.cwd IS NOT NULL AND m.project_slug IS NOT NULL
+         {rng}
+       GROUP BY src_cwd, src_slug, src_session, target
+    """
+    pair: dict = {}
+    with connect(db_path) as c:
+        index = _build_workspace_index(c)
+        for row in c.execute(sql, (*_CROSS_WS_TOOLS, *args)):
+            src = project_name_for(row["src_cwd"], row["src_slug"]) or row["src_slug"] or "unknown"
+            dst = _classify_path(row["target"], index)
+            if src == dst:
+                continue
+            key = (src, dst)
+            pd = pair.setdefault(key, {"calls": 0, "sessions": set(), "files": {}})
+            pd["calls"] += row["n"]
+            pd["sessions"].add(row["src_session"])
+            pd["files"][row["target"]] = pd["files"].get(row["target"], 0) + row["n"]
+    out = []
+    for (src, dst), pd in pair.items():
+        top_files = sorted(pd["files"].items(), key=lambda x: -x[1])[:5]
+        out.append({
+            "source": src,
+            "target": dst,
+            "calls": pd["calls"],
+            "sessions": len(pd["sessions"]),
+            "top_files": [{"path": p, "n": n} for p, n in top_files],
+        })
+    out.sort(key=lambda x: -x["calls"])
+    return out[:limit]
+
+
+def subagent_breakdown(db_path, since=None, until=None) -> list:
+    """Per-model breakdown split by main vs sidechain (subagent dispatched via Task).
+
+    Surfaces the attribution that model_breakdown aggregates away — e.g., the
+    fact that Sonnet usage is almost entirely from subagent dispatch.
+    """
+    rng, args = _range_clause(since, until)
+    sql = f"""
+      SELECT COALESCE(model, 'unknown') AS model,
+             is_sidechain,
+             COUNT(*) AS messages,
+             COUNT(DISTINCT session_id) AS sessions,
+             COALESCE(SUM(input_tokens),0)           AS input_tokens,
+             COALESCE(SUM(output_tokens),0)          AS output_tokens,
+             COALESCE(SUM(cache_read_tokens),0)      AS cache_read_tokens,
+             COALESCE(SUM(cache_create_5m_tokens),0) AS cache_create_5m_tokens,
+             COALESCE(SUM(cache_create_1h_tokens),0) AS cache_create_1h_tokens
+        FROM messages
+       WHERE type = 'assistant' AND model IS NOT NULL AND model != '<synthetic>'
+       {rng}
+       GROUP BY model, is_sidechain
+       ORDER BY (input_tokens + output_tokens + cache_create_5m_tokens + cache_create_1h_tokens) DESC
+    """
+    with connect(db_path) as c:
+        return [dict(r) for r in c.execute(sql, args)]
+
+
+def top_subagent_sessions(db_path, limit: int = 20, since=None, until=None) -> list:
+    """Sessions ranked by total subagent (sidechain) tokens spent.
+
+    The "dispatch tree" (which Opus prompt dispatched which subagent) isn't
+    reconstructable from the current schema — parent_uuid in a sidechain
+    message points to its own thread's prior message, not the dispatching
+    main-thread message. We expose ranking + per-model split instead.
+    """
+    rng, args = _range_clause(since, until)
+    sql = f"""
+      SELECT session_id,
+             project_slug,
+             COUNT(*) AS subagent_msgs,
+             COALESCE(SUM(input_tokens + output_tokens),0) AS io_tokens,
+             COALESCE(SUM(cache_read_tokens),0) AS cache_read_tokens,
+             GROUP_CONCAT(DISTINCT COALESCE(model,'unknown')) AS models
+        FROM messages
+       WHERE is_sidechain = 1 AND type = 'assistant' AND model IS NOT NULL
+       {rng}
+       GROUP BY session_id
+       ORDER BY io_tokens DESC
+       LIMIT ?
+    """
+    with connect(db_path) as c:
+        rows = [dict(r) for r in c.execute(sql, (*args, limit))]
+        slug_cache: dict = {}
+        for r in rows:
+            slug = r["project_slug"]
+            if slug not in slug_cache:
+                cwds = [row["cwd"] for row in c.execute(
+                    "SELECT DISTINCT cwd FROM messages WHERE project_slug=? AND cwd IS NOT NULL",
+                    (slug,),
+                )]
+                slug_cache[slug] = best_project_name(cwds, slug)
+            r["project_name"] = slug_cache[slug]
+            r["models"] = sorted((r["models"] or "").split(",")) if r["models"] else []
+    return rows

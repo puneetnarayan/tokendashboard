@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from .db import connect
+from .db import connect, cross_workspace_leaks
 
 
 def _iso_days_ago(today_iso: str, n: int) -> str:
@@ -177,10 +177,48 @@ def outlier_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
     return out
 
 
+def cross_workspace_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
+    """Flag agent workspace X reading workspace Y > 50 times in past 7d.
+
+    Suggests moving the cross-referenced info into the source workspace's
+    CLAUDE.md or memory so agents don't keep crossing.
+    """
+    today_iso = today_iso or datetime.utcnow().isoformat()
+    since = _iso_days_ago(today_iso, 7)
+    leaks = cross_workspace_leaks(db_path, limit=10, since=since)
+    out = []
+    for leak in leaks:
+        if (leak["calls"] or 0) < 50:
+            continue
+        scope = f"{leak['source']}->{leak['target']}"
+        key = _key("cross-workspace", scope)
+        if _is_dismissed(db_path, key):
+            continue
+        body = (
+            f"Sessions in {leak['source']} touched files in {leak['target']} "
+            f"{leak['calls']} times across {leak['sessions']} sessions in the past 7 days."
+        )
+        if leak["top_files"]:
+            top = leak["top_files"][0]
+            body += f" Top file: {top['path']} ({top['n']} reads)."
+        body += (
+            " If this info is load-bearing, summarize it into the source"
+            " workspace's CLAUDE.md or a memory entry so agents stop crossing."
+        )
+        out.append({
+            "key": key, "category": "cross-workspace",
+            "title": f"{leak['source']} -> {leak['target']}: {leak['calls']} cross-workspace calls",
+            "body": body,
+            "scope": scope,
+        })
+    return out
+
+
 def all_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
     return [
         *cache_discipline_tips(db_path, today_iso),
         *repeated_target_tips(db_path, today_iso),
         *right_size_tips(db_path, today_iso),
         *outlier_tips(db_path, today_iso),
+        *cross_workspace_tips(db_path, today_iso),
     ]

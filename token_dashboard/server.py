@@ -14,6 +14,8 @@ from .db import (
     overview_totals, expensive_prompts, project_summary,
     tool_token_breakdown, recent_sessions, session_turns,
     daily_token_breakdown, model_breakdown, skill_breakdown,
+    workspaces_matrix, cross_workspace_leaks,
+    subagent_breakdown, top_subagent_sessions,
 )
 from .pricing import load_pricing, cost_for, get_plan, set_plan
 from .tips import all_tips, dismiss_tip
@@ -137,6 +139,24 @@ def build_handler(db_path: str, projects_dir: str):
             if path.startswith("/api/sessions/"):
                 sid = path.rsplit("/", 1)[1]
                 return _send_json(self, session_turns(db_path, sid))
+            if path == "/api/workspaces":
+                return _send_json(self, workspaces_matrix(db_path, since, until))
+            if path == "/api/cross-workspace-leaks":
+                return _send_json(self, cross_workspace_leaks(
+                    db_path, limit=_clamp_limit(qs.get("limit", ["20"])[0], 20),
+                    since=since, until=until,
+                ))
+            if path == "/api/subagents":
+                rows = subagent_breakdown(db_path, since, until)
+                for r in rows:
+                    c = cost_for(r["model"], r, pricing)
+                    r["cost_usd"] = c["usd"]
+                    r["cost_estimated"] = c["estimated"]
+                top = top_subagent_sessions(
+                    db_path, limit=_clamp_limit(qs.get("limit", ["20"])[0], 20),
+                    since=since, until=until,
+                )
+                return _send_json(self, {"breakdown": rows, "top_sessions": top})
             if path == "/api/tips":
                 return _send_json(self, all_tips(db_path))
             if path == "/api/plan":
