@@ -49,18 +49,19 @@ export default async function (root) {
       ${rangeTabs}
     </div>
 
-    <div class="row cols-3">
-      <div class="card kpi"><div class="label">Workspaces touched</div><div class="value">${fmt.int(matrix.nodes.length)}</div></div>
+    <div class="row cols-4">
+      <div class="card kpi"><div class="label">Workspaces touched</div><div class="value">${fmt.int(matrix.nodes.length / 2)}</div></div>
       <div class="card kpi"><div class="label">File-touching calls</div><div class="value">${fmt.int(matrix.total_calls)}</div></div>
-      <div class="card kpi"><div class="label">Cross-workspace calls</div><div class="value">${fmt.int(totalLeakCalls)}</div></div>
+      <div class="card kpi"><div class="label">Cross-workspace</div><div class="value">${fmt.int(matrix.cross_workspace_calls)}</div></div>
+      <div class="card kpi"><div class="label">Within-workspace</div><div class="value">${fmt.int(matrix.self_loop_calls)}</div></div>
     </div>
 
     <div class="card" style="margin-top:16px">
-      <h3>Workspace flow — agent cwd → file target</h3>
+      <h3>Workspace flow — agent cwd (left) → file target (right)</h3>
       <p class="muted" style="margin:-4px 0 14px;font-size:12px">
-        Only Read/Edit/Write/NotebookEdit calls counted (${matrix.tools_considered.join(', ')}). Self-loops show in-workspace work; cross-workspace links are the candidates for CLAUDE.md consolidation.
+        Bipartite Sankey: left column = where the session ran, right column = which workspace's files it touched. Same-name pairs (e.g. <code>Brokering_GATEWAY (agent) → Brokering_GATEWAY (files)</code>) are within-workspace work. Cross-pairs are the consolidation candidates. Only Read/Edit/Write/NotebookEdit counted (${matrix.tools_considered.join(', ')}).
       </p>
-      <div id="ch-workspaces" style="height:520px"></div>
+      <div id="ch-workspaces" style="height:560px"></div>
     </div>
 
     <div class="card" style="margin-top:16px">
@@ -108,3 +109,4 @@ export default async function (root) {
     document.getElementById('ch-workspaces').innerHTML = '<p class="muted" style="padding:40px;text-align:center">No file-touching activity in this range.</p>';
   }
 }
+

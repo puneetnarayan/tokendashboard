@@ -133,6 +133,9 @@ export function groupedBarChart(el, { categories, series, formatter }) {
 
 export function sankeyChart(el, { nodes, links, formatter }) {
   const c = mount(el);
+  // Accept nodes as either ['name', ...] or [{name: 'x'}, ...] — the bipartite
+  // workspaces matrix returns objects so it can carry layout hints later.
+  const nodeData = nodes.map(n => typeof n === 'string' ? { name: n } : n);
   c.setOption({
     ...BASE,
     tooltip: {
@@ -152,13 +155,13 @@ export function sankeyChart(el, { nodes, links, formatter }) {
     },
     series: [{
       type: 'sankey',
-      data: nodes.map(n => ({ name: n })),
+      data: nodeData,
       links,
       emphasis: { focus: 'adjacency' },
       lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.4 },
       label: { color: '#E6EDF3', fontFamily: 'Inter', fontSize: 11 },
       nodeAlign: 'left',
-      left: 8, right: 8, top: 12, bottom: 12,
+      left: 8, right: 120, top: 12, bottom: 12,
       itemStyle: { borderColor: '#0F1419', borderWidth: 1 },
     }],
   });

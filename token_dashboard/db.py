@@ -455,6 +455,12 @@ def workspaces_matrix(db_path, since=None, until=None) -> dict:
 
     Only Read/Edit/Write/NotebookEdit calls are counted — they uniquely
     identify a file. Glob/Grep patterns are skipped (often workspace-free).
+
+    Layout is bipartite: src nodes (left column, suffixed " (agent)") and
+    dst nodes (right column, suffixed " (files)"). This guarantees a DAG
+    even when the raw data has self-loops (agent reading its own workspace)
+    or opposite-direction pairs (A->B and B->A both happen) — both would
+    crash ECharts' Sankey, which requires acyclic input.
     """
     rng, args = _range_clause(since, until, col="t.timestamp")
     sql = f"""
@@ -467,20 +473,32 @@ def workspaces_matrix(db_path, since=None, until=None) -> dict:
          {rng}
        GROUP BY src_cwd, src_slug, target
     """
-    nodes: set = set()
+    src_nodes: set = set()
+    dst_nodes: set = set()
     matrix: dict = {}
+    self_loop_calls = 0
+    cross_calls = 0
     with connect(db_path) as c:
         index = _build_workspace_index(c)
         for row in c.execute(sql, (*_CROSS_WS_TOOLS, *args)):
             src = project_name_for(row["src_cwd"], row["src_slug"]) or row["src_slug"] or "unknown"
             dst = _classify_path(row["target"], index)
-            nodes.add(src); nodes.add(dst)
-            key = (src, dst)
-            matrix[key] = matrix.get(key, 0) + row["n"]
+            n = row["n"]
+            if src == dst:
+                self_loop_calls += n
+            else:
+                cross_calls += n
+            src_label = f"{src} (agent)"
+            dst_label = f"{dst} (files)"
+            src_nodes.add(src_label); dst_nodes.add(dst_label)
+            key = (src_label, dst_label)
+            matrix[key] = matrix.get(key, 0) + n
     return {
-        "nodes": sorted(nodes),
+        "nodes": [{"name": n} for n in sorted(src_nodes) + sorted(dst_nodes)],
         "links": [{"source": s, "target": t, "value": v} for (s, t), v in matrix.items()],
         "total_calls": sum(matrix.values()),
+        "self_loop_calls": self_loop_calls,
+        "cross_workspace_calls": cross_calls,
         "tools_considered": list(_CROSS_WS_TOOLS),
     }
 
@@ -554,6 +572,108 @@ def subagent_breakdown(db_path, since=None, until=None) -> list:
     """
     with connect(db_path) as c:
         return [dict(r) for r in c.execute(sql, args)]
+
+
+_AGENT_KIND_SQL = """
+  CASE
+    WHEN is_sidechain = 0 THEN 'main'
+    WHEN agent_id LIKE 'acompact-%' THEN 'compact'
+    ELSE 'subagent'
+  END
+"""
+
+
+def orchestration_breakdown(db_path, since=None, until=None) -> dict:
+    """Per-entrypoint + per-agent-kind attribution, including SDK external runs.
+
+    Why this exists: /api/by-model and /api/subagents both aggregate dimensions
+    that hide real attribution. In particular:
+
+    * Auto-compaction (CC's internal context-compression subagent, agent_id
+      LIKE 'acompact-*') is a separate kind from user-dispatched Task subagents
+      but the original breakdown lumps both as 'sidechain'.
+    * External orchestration via claude_agent_sdk (e.g. the
+      AgenticEfficiencyHarness harness invoking Opus/Sonnet/Haiku from a
+      Python script) writes its own JSONL with entrypoint='sdk-py'/'sdk-ts'/
+      'sdk-cli'. These NEVER go through the Task tool so they have no
+      is_sidechain marker — they show as main-thread messages from the
+      orchestrator's perspective. Splitting on entrypoint surfaces them.
+
+    Returns:
+      by_kind: rows per (kind, model) — kind ∈ {main, compact, subagent}
+      by_entrypoint: rows per (entrypoint, model) covering all assistant turns
+      sdk_runs: SDK-entrypoint sessions grouped by cwd — the "external
+        orchestration" clusters (AEH-style)
+    """
+    rng, args = _range_clause(since, until)
+    by_kind_sql = f"""
+      SELECT {_AGENT_KIND_SQL} AS kind,
+             COALESCE(model, 'unknown') AS model,
+             COUNT(*) AS messages,
+             COUNT(DISTINCT session_id) AS sessions,
+             COALESCE(SUM(input_tokens),0)           AS input_tokens,
+             COALESCE(SUM(output_tokens),0)          AS output_tokens,
+             COALESCE(SUM(cache_read_tokens),0)      AS cache_read_tokens,
+             COALESCE(SUM(cache_create_5m_tokens),0) AS cache_create_5m_tokens,
+             COALESCE(SUM(cache_create_1h_tokens),0) AS cache_create_1h_tokens
+        FROM messages
+       WHERE type = 'assistant' AND model IS NOT NULL AND model != '<synthetic>'
+       {rng}
+       GROUP BY kind, model
+       ORDER BY (input_tokens + output_tokens + cache_create_5m_tokens + cache_create_1h_tokens) DESC
+    """
+    by_ep_sql = f"""
+      SELECT COALESCE(entrypoint, 'unknown') AS entrypoint,
+             COALESCE(model, 'unknown') AS model,
+             COUNT(*) AS messages,
+             COUNT(DISTINCT session_id) AS sessions,
+             COALESCE(SUM(input_tokens),0)           AS input_tokens,
+             COALESCE(SUM(output_tokens),0)          AS output_tokens,
+             COALESCE(SUM(cache_read_tokens),0)      AS cache_read_tokens,
+             COALESCE(SUM(cache_create_5m_tokens),0) AS cache_create_5m_tokens,
+             COALESCE(SUM(cache_create_1h_tokens),0) AS cache_create_1h_tokens
+        FROM messages
+       WHERE type = 'assistant' AND model IS NOT NULL AND model != '<synthetic>'
+       {rng}
+       GROUP BY entrypoint, model
+       ORDER BY (input_tokens + output_tokens + cache_create_5m_tokens + cache_create_1h_tokens) DESC
+    """
+    sdk_runs_sql = f"""
+      SELECT entrypoint, cwd, project_slug,
+             COUNT(DISTINCT session_id) AS sessions,
+             COUNT(*) AS messages,
+             COALESCE(SUM(input_tokens + output_tokens),0) AS io_tokens,
+             COALESCE(SUM(cache_read_tokens),0) AS cache_read_tokens,
+             GROUP_CONCAT(DISTINCT COALESCE(model, 'unknown')) AS models
+        FROM messages
+       WHERE type = 'assistant' AND entrypoint LIKE 'sdk-%'
+       {rng}
+       GROUP BY entrypoint, cwd, project_slug
+       ORDER BY io_tokens DESC
+       LIMIT 25
+    """
+    with connect(db_path) as c:
+        by_kind = [dict(r) for r in c.execute(by_kind_sql, args)]
+        by_entrypoint = [dict(r) for r in c.execute(by_ep_sql, args)]
+        sdk_runs = []
+        slug_cache: dict = {}
+        for row in c.execute(sdk_runs_sql, args):
+            d = dict(row)
+            slug = d["project_slug"]
+            if slug not in slug_cache:
+                cwds = [r2["cwd"] for r2 in c.execute(
+                    "SELECT DISTINCT cwd FROM messages WHERE project_slug=? AND cwd IS NOT NULL",
+                    (slug,),
+                )]
+                slug_cache[slug] = best_project_name(cwds, slug)
+            d["workspace"] = slug_cache[slug]
+            d["models"] = sorted((d["models"] or "").split(",")) if d["models"] else []
+            sdk_runs.append(d)
+    return {
+        "by_kind": by_kind,
+        "by_entrypoint": by_entrypoint,
+        "sdk_runs": sdk_runs,
+    }
 
 
 def top_subagent_sessions(db_path, limit: int = 20, since=None, until=None) -> list:

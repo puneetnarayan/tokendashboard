@@ -15,7 +15,7 @@ from .db import (
     tool_token_breakdown, recent_sessions, session_turns,
     daily_token_breakdown, model_breakdown, skill_breakdown,
     workspaces_matrix, cross_workspace_leaks,
-    subagent_breakdown, top_subagent_sessions,
+    subagent_breakdown, top_subagent_sessions, orchestration_breakdown,
 )
 from .pricing import load_pricing, cost_for, get_plan, set_plan
 from .tips import all_tips, dismiss_tip
@@ -156,7 +156,19 @@ def build_handler(db_path: str, projects_dir: str):
                     db_path, limit=_clamp_limit(qs.get("limit", ["20"])[0], 20),
                     since=since, until=until,
                 )
-                return _send_json(self, {"breakdown": rows, "top_sessions": top})
+                orch = orchestration_breakdown(db_path, since, until)
+                for bucket in ("by_kind", "by_entrypoint"):
+                    for r in orch[bucket]:
+                        c = cost_for(r["model"], r, pricing)
+                        r["cost_usd"] = c["usd"]
+                        r["cost_estimated"] = c["estimated"]
+                return _send_json(self, {
+                    "breakdown": rows,
+                    "top_sessions": top,
+                    "by_kind": orch["by_kind"],
+                    "by_entrypoint": orch["by_entrypoint"],
+                    "sdk_runs": orch["sdk_runs"],
+                })
             if path == "/api/tips":
                 return _send_json(self, all_tips(db_path))
             if path == "/api/plan":

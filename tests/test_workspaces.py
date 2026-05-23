@@ -5,7 +5,7 @@ import unittest
 from token_dashboard.db import (
     init_db, connect,
     workspaces_matrix, cross_workspace_leaks,
-    subagent_breakdown, top_subagent_sessions,
+    subagent_breakdown, top_subagent_sessions, orchestration_breakdown,
     _workspace_root_path, _build_workspace_index, _classify_path,
 )
 
@@ -97,24 +97,43 @@ class WorkspacesMatrixTests(unittest.TestCase):
             _add_tool(c, "mb", "s2", slug_b, "Write", cwd_b + r"\out.txt", "2026-05-01T00:00:05Z")
             c.commit()
 
-    def test_returns_sankey_shape(self):
+    def test_returns_bipartite_sankey_shape(self):
         m = workspaces_matrix(self.db)
         self.assertIn("nodes", m)
         self.assertIn("links", m)
         self.assertIn("total_calls", m)
+        self.assertIn("self_loop_calls", m)
+        self.assertIn("cross_workspace_calls", m)
         self.assertGreater(m["total_calls"], 0)
         for l in m["links"]:
             self.assertIn("source", l)
             self.assertIn("target", l)
             self.assertIn("value", l)
+        # Bipartite: every source ends with " (agent)" and every target with " (files)".
+        # Guarantees DAG for ECharts even with self-loops + opposite-direction pairs.
+        for l in m["links"]:
+            self.assertTrue(l["source"].endswith(" (agent)"), l["source"])
+            self.assertTrue(l["target"].endswith(" (files)"), l["target"])
+        for n in m["nodes"]:
+            self.assertIn("name", n)
 
     def test_classifies_cross_workspace_link(self):
         m = workspaces_matrix(self.db)
         pairs = {(l["source"], l["target"]): l["value"] for l in m["links"]}
-        self.assertEqual(pairs.get(("ProjA", "ProjB")), 1)
-        self.assertEqual(pairs.get(("ProjA", "ProjA")), 2)
-        self.assertEqual(pairs.get(("ProjB", "ProjB")), 1)
-        self.assertEqual(pairs.get(("ProjA", "external")), 1)
+        # Self-loop: same workspace on both sides (still represented as
+        # bipartite edge, but src and dst halves share the workspace name).
+        self.assertEqual(pairs.get(("ProjA (agent)", "ProjA (files)")), 2)
+        self.assertEqual(pairs.get(("ProjB (agent)", "ProjB (files)")), 1)
+        # Cross-workspace.
+        self.assertEqual(pairs.get(("ProjA (agent)", "ProjB (files)")), 1)
+        # External (no workspace match).
+        self.assertEqual(pairs.get(("ProjA (agent)", "external (files)")), 1)
+
+    def test_separates_self_loop_and_cross_counters(self):
+        m = workspaces_matrix(self.db)
+        self.assertEqual(m["self_loop_calls"], 3)   # 2 ProjA→ProjA + 1 ProjB→ProjB
+        self.assertEqual(m["cross_workspace_calls"], 2)  # ProjA→ProjB + ProjA→external
+        self.assertEqual(m["self_loop_calls"] + m["cross_workspace_calls"], m["total_calls"])
 
     def test_only_path_tools_counted(self):
         # Bash/Glob/Task are NOT in the cross-workspace tool whitelist.
@@ -125,6 +144,76 @@ class WorkspacesMatrixTests(unittest.TestCase):
         m = workspaces_matrix(self.db)
         # total_calls didn't increase
         self.assertEqual(m["total_calls"], 5)
+
+
+class OrchestrationBreakdownTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "orch.db")
+        init_db(self.db)
+        with connect(self.db) as c:
+            # Main thread Opus call (interactive cli).
+            c.execute(
+                "INSERT INTO messages (uuid, session_id, project_slug, cwd, type, "
+                "is_sidechain, agent_id, entrypoint, timestamp, model, "
+                "input_tokens, output_tokens, cache_read_tokens) VALUES "
+                "('m1','s1','p','/x','assistant',0,NULL,'cli','2026-05-01T00:00:00Z','claude-opus-4-7',100,200,0)"
+            )
+            # Auto-compaction subagent (acompact-* agent_id).
+            c.execute(
+                "INSERT INTO messages (uuid, session_id, project_slug, cwd, type, "
+                "is_sidechain, agent_id, entrypoint, timestamp, model, "
+                "input_tokens, output_tokens, cache_read_tokens) VALUES "
+                "('m2','s1','p','/x','assistant',1,'acompact-abc','cli','2026-05-01T00:01:00Z','claude-sonnet-4-6',50,100,0)"
+            )
+            # Task-dispatched subagent (non-compact agent_id).
+            c.execute(
+                "INSERT INTO messages (uuid, session_id, project_slug, cwd, type, "
+                "is_sidechain, agent_id, entrypoint, timestamp, model, "
+                "input_tokens, output_tokens, cache_read_tokens) VALUES "
+                "('m3','s1','p','/x','assistant',1,'a1234','cli','2026-05-01T00:02:00Z','claude-haiku-4-5-20251001',30,40,0)"
+            )
+            # External SDK orchestration run (entrypoint sdk-py).
+            c.execute(
+                "INSERT INTO messages (uuid, session_id, project_slug, cwd, type, "
+                "is_sidechain, agent_id, entrypoint, timestamp, model, "
+                "input_tokens, output_tokens, cache_read_tokens) VALUES "
+                "('m4','s2','p','/x','assistant',0,NULL,'sdk-py','2026-05-01T00:03:00Z','claude-opus-4-7',500,1000,0)"
+            )
+            c.commit()
+
+    def test_kind_splits_main_compact_subagent(self):
+        o = orchestration_breakdown(self.db)
+        kinds = {(r["kind"], r["model"]): r for r in o["by_kind"]}
+        self.assertIn(("main", "claude-opus-4-7"), kinds)
+        self.assertIn(("compact", "claude-sonnet-4-6"), kinds)
+        self.assertIn(("subagent", "claude-haiku-4-5-20251001"), kinds)
+
+    def test_entrypoint_breakdown_separates_cli_from_sdk(self):
+        o = orchestration_breakdown(self.db)
+        eps = {(r["entrypoint"], r["model"]) for r in o["by_entrypoint"]}
+        self.assertIn(("cli", "claude-opus-4-7"), eps)
+        self.assertIn(("sdk-py", "claude-opus-4-7"), eps)
+
+    def test_sdk_runs_lists_external_orchestration(self):
+        o = orchestration_breakdown(self.db)
+        self.assertEqual(len(o["sdk_runs"]), 1)
+        run = o["sdk_runs"][0]
+        self.assertEqual(run["entrypoint"], "sdk-py")
+        self.assertEqual(run["sessions"], 1)
+        self.assertIn("claude-opus-4-7", run["models"])
+
+    def test_skips_synthetic_in_kind(self):
+        with connect(self.db) as c:
+            c.execute(
+                "INSERT INTO messages (uuid, session_id, project_slug, cwd, type, "
+                "is_sidechain, timestamp, model) VALUES "
+                "('mx','s1','p','/x','assistant',0,'2026-05-01T00:10:00Z','<synthetic>')"
+            )
+            c.commit()
+        o = orchestration_breakdown(self.db)
+        models = {r["model"] for r in o["by_kind"]}
+        self.assertNotIn("<synthetic>", models)
 
 
 class CrossWorkspaceLeaksTests(unittest.TestCase):
