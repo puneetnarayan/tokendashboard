@@ -8,6 +8,7 @@ from token_dashboard.db import (
     tool_token_breakdown, recent_sessions, session_turns,
     daily_token_breakdown, model_breakdown, project_name_for,
     skill_breakdown, rebuild_summaries,
+    total_active_seconds, daily_active_seconds, ACTIVE_GAP_THRESHOLD_S,
 )
 
 
@@ -411,6 +412,85 @@ class ProjectRollupTests(unittest.TestCase):
         self.assertNotEqual(result[0]["project_name"], "skills")
         self.assertNotEqual(result[0]["project_name"], "foo")
 
+    def test_active_seconds_caps_long_idle_gap(self):
+        # Two messages 9 hours apart in the same session must contribute
+        # 0 active seconds (long gap = user walked away). A second pair
+        # with a 30-second gap counts in full.
+        self._insert([
+            {"uuid": "u1", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "cwd": "/mnt/data/dev/x", "ts": "2026-04-10T09:00:00Z", "in": 1},
+            {"uuid": "a1", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "cwd": "/mnt/data/dev/x", "ts": "2026-04-10T18:00:00Z", "in": 1},
+            {"uuid": "u2", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "cwd": "/mnt/data/dev/x", "ts": "2026-04-10T18:00:30Z", "in": 1},
+        ])
+        secs = total_active_seconds(self.db)
+        # Only the 30-second gap counts. Allow a small float slack.
+        self.assertAlmostEqual(secs, 30, delta=1.0)
+
+    def test_active_seconds_appears_on_project_row(self):
+        # 3 messages 1 min apart in a single session — 120 s total active.
+        self._insert([
+            {"uuid": "u1", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "cwd": "/mnt/data/dev/x", "ts": "2026-04-10T09:00:00Z", "in": 1},
+            {"uuid": "a1", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "cwd": "/mnt/data/dev/x", "ts": "2026-04-10T09:01:00Z", "in": 1},
+            {"uuid": "u2", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "cwd": "/mnt/data/dev/x", "ts": "2026-04-10T09:02:00Z", "in": 1},
+        ])
+        rows = project_summary(self.db)
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0]["active_seconds"], 120, delta=1.0)
+
+    def test_active_seconds_rolls_up_across_hosts(self):
+        # Same project, two hosts. After cross-host merge the active
+        # seconds must add up.
+        self._insert([
+            {"uuid": "u1", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "host": "jstation", "cwd": "/mnt/data/dev/x",
+             "ts": "2026-04-10T09:00:00Z", "in": 1},
+            {"uuid": "a1", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "host": "jstation", "cwd": "/mnt/data/dev/x",
+             "ts": "2026-04-10T09:01:00Z", "in": 1},
+            {"uuid": "u2", "session_id": "s2", "slug": "-home-dvids-Dev-x",
+             "host": "jlap", "cwd": "/home/dvids/Dev/x",
+             "ts": "2026-04-10T10:00:00Z", "in": 1},
+            {"uuid": "a2", "session_id": "s2", "slug": "-home-dvids-Dev-x",
+             "host": "jlap", "cwd": "/home/dvids/Dev/x",
+             "ts": "2026-04-10T10:02:00Z", "in": 1},
+        ])
+        rows = project_summary(self.db)
+        self.assertEqual(len(rows), 1)
+        # 60 s on jstation + 120 s on jlap.
+        self.assertAlmostEqual(rows[0]["active_seconds"], 180, delta=1.0)
+
+    def test_active_seconds_within_threshold_counts_full_gap(self):
+        # 9-minute gap is under the 10-min default — counts in full.
+        self._insert([
+            {"uuid": "u1", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "cwd": "/mnt/data/dev/x", "ts": "2026-04-10T09:00:00Z", "in": 1},
+            {"uuid": "a1", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "cwd": "/mnt/data/dev/x", "ts": "2026-04-10T09:09:00Z", "in": 1},
+        ])
+        secs = total_active_seconds(self.db)
+        self.assertAlmostEqual(secs, 9 * 60, delta=1.0)
+        self.assertEqual(ACTIVE_GAP_THRESHOLD_S, 600)
+
+    def test_daily_active_seconds_attributes_to_correct_day(self):
+        # 5-minute gap crossing midnight — half counted to each day in
+        # the daily breakdown? SQLite attributes the gap to whatever day
+        # the LATER timestamp is in (the timestamp column's substring is
+        # what GROUP BY uses). Document that and assert it.
+        self._insert([
+            {"uuid": "u1", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "cwd": "/mnt/data/dev/x", "ts": "2026-04-10T23:58:00Z", "in": 1},
+            {"uuid": "a1", "session_id": "s1", "slug": "-mnt-data-dev-x",
+             "cwd": "/mnt/data/dev/x", "ts": "2026-04-11T00:03:00Z", "in": 1},
+        ])
+        per_day = daily_active_seconds(self.db)
+        # Gap is 5 min; attributed to 2026-04-11 (the later message).
+        self.assertAlmostEqual(per_day.get("2026-04-11", 0), 5 * 60, delta=1.0)
+
     def test_response_shape_unchanged_for_consumers(self):
         # The Projects UI relies on these keys — guard against rename drift.
         self._insert([
@@ -423,6 +503,7 @@ class ProjectRollupTests(unittest.TestCase):
             "project_slug", "project_name", "sessions", "turns",
             "input_tokens", "output_tokens",
             "billable_tokens", "cache_read_tokens",
+            "active_seconds",
             "hosts", "contributing_slugs",
         ):
             self.assertIn(k, r, f"missing key {k!r} from project_summary row")

@@ -92,13 +92,14 @@ function renderBundle(root, bundle, range) {
       ${rangeTabs}
     </div>
 
-    <div class="row cols-7">
+    <div class="row cols-8">
       ${kpi('Sessions',     totals.sessions,           fmt.int(totals.sessions),           fmt.int(totals.sessions),                              prev_totals && prev_totals.sessions)}
       ${kpi('Turns',        totals.turns,              fmt.int(totals.turns),              fmt.int(totals.turns),                                 prev_totals && prev_totals.turns)}
       ${kpi('Input',        totals.input_tokens,       fmt.compact(totals.input_tokens),   fmt.int(totals.input_tokens) + ' tokens',              prev_totals && prev_totals.input_tokens)}
       ${kpi('Output',       totals.output_tokens,      fmt.compact(totals.output_tokens),  fmt.int(totals.output_tokens) + ' tokens',             prev_totals && prev_totals.output_tokens)}
       ${kpi('Cache read',   totals.cache_read_tokens,  fmt.compact(totals.cache_read_tokens), fmt.int(totals.cache_read_tokens) + ' tokens',     prev_totals && prev_totals.cache_read_tokens)}
       ${kpi('Cache create', cacheCreate,               fmt.compact(cacheCreate),           fmt.int(cacheCreate) + ' tokens',                      prevCacheCreate)}
+      ${kpi('Active time',  totals.active_seconds || 0, fmt.duration(totals.active_seconds || 0), fmt.duration(totals.active_seconds || 0) + ' hands-on', prev_totals && prev_totals.active_seconds, 'active')}
       <div class="card kpi cost">
         <div class="label">Est. cost</div>
         <div class="value" title="${fmt.usd(totals.cost_usd)}">${fmt.usd(totals.cost_usd)}</div>
@@ -107,7 +108,15 @@ function renderBundle(root, bundle, range) {
     </div>
 
     <div class="card" id="heatmap-card" style="margin-top:16px">
-      <h3 style="display:flex;align-items:center"><span>When you use Claude</span><span class="spacer"></span><span class="muted" style="font-size:12px">last 365 days · darker = more tokens</span></h3>
+      <h3 style="display:flex;align-items:center;gap:10px">
+        <span>When you use Claude</span>
+        <span class="spacer"></span>
+        <span class="muted" style="font-size:12px" id="heatmap-caption">last 365 days · darker = more tokens</span>
+        <span class="heatmap-toggle" role="group" aria-label="Heatmap metric">
+          <button type="button" data-metric="tokens" class="heatmap-btn is-active">Tokens</button>
+          <button type="button" data-metric="hours"  class="heatmap-btn">Hours</button>
+        </span>
+      </h3>
       <div id="ch-heatmap" style="overflow-x:auto"></div>
     </div>
 
@@ -172,7 +181,19 @@ function renderBundle(root, bundle, range) {
   // Calendar heatmap — independent of the range tabs (it's always "last
   // 365 days" so the user can see when they actually code regardless of
   // which range is selected for the KPIs/charts).
-  renderHeatmap(root.querySelector('#ch-heatmap'));
+  const heatHost = root.querySelector('#ch-heatmap');
+  const heatCaption = root.querySelector('#heatmap-caption');
+  let heatMetric = 'tokens';
+  renderHeatmap(heatHost, heatMetric, heatCaption);
+  root.querySelectorAll('.heatmap-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      heatMetric = btn.dataset.metric;
+      root.querySelectorAll('.heatmap-btn').forEach(b =>
+        b.classList.toggle('is-active', b.dataset.metric === heatMetric)
+      );
+      renderHeatmap(heatHost, heatMetric, heatCaption);
+    });
+  });
 
   stackedBarChart(document.getElementById('ch-daily-billable'), {
     categories: daily.map(d => d.day),
@@ -226,7 +247,7 @@ function planSubtitle() {
 }
 
 // ── Calendar heatmap (last 365 days) ─────────────────────────────────────────
-async function renderHeatmap(host) {
+async function renderHeatmap(host, metric = 'tokens', caption = null) {
   if (!host) return;
   const since = new Date(Date.now() - 365 * 86400_000).toISOString();
   const cacheKey = '/api/daily?since=' + encodeURIComponent(since);
@@ -235,9 +256,21 @@ async function renderHeatmap(host) {
     daily = await api(cacheKey);
     cacheSet(cacheKey, daily);
   }
-  const totalsByDay = new Map(
-    daily.map(d => [d.day, (d.input_tokens || 0) + (d.output_tokens || 0)])
-  );
+  // Same data feeds both modes — only the value-extractor + tooltip
+  // formatter change. Cached payload now ships `active_seconds`.
+  const extract = metric === 'hours'
+    ? d => d.active_seconds || 0
+    : d => (d.input_tokens || 0) + (d.output_tokens || 0);
+  const fmtVal = metric === 'hours'
+    ? v => `${(v / 3600).toFixed(1)} h`
+    : v => `${v.toLocaleString()} tokens`;
+  if (caption) {
+    caption.textContent = metric === 'hours'
+      ? 'last 365 days · darker = more hands-on time · concurrent sessions sum'
+      : 'last 365 days · darker = more tokens';
+  }
+
+  const totalsByDay = new Map(daily.map(d => [d.day, extract(d)]));
   const today = new Date();
   // Start on the most-recent Sunday so week columns are uniform.
   const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -262,7 +295,7 @@ async function renderHeatmap(host) {
       const fill = v === 0 ? 'rgba(255,255,255,0.04)' : `rgba(74,158,255,${intensity.toFixed(2)})`;
       const x = w * (cellSize + cellGap);
       const y = d * (cellSize + cellGap);
-      cells.push(`<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" rx="2" fill="${fill}"><title>${iso} · ${v.toLocaleString()} tokens</title></rect>`);
+      cells.push(`<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" rx="2" fill="${fill}"><title>${iso} · ${fmtVal(v)}</title></rect>`);
     }
     // Month label above the first column of each new month.
     const probe = new Date(start);

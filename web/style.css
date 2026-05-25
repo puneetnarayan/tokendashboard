@@ -103,18 +103,37 @@ main#app { padding: 24px 20px; max-width: 1400px; margin: 0 auto; }
 
 /* layout */
 .row { display: grid; gap: 16px; }
+.row.cols-8 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 .row.cols-7 { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 .row.cols-4 { grid-template-columns: repeat(4, 1fr); }
 .row.cols-3 { grid-template-columns: repeat(3, 1fr); }
 .row.cols-2 { grid-template-columns: 1fr 1fr; }
+@media (max-width: 1280px) {
+  .row.cols-8 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
 @media (max-width: 1100px) {
   .row.cols-7 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
+  .row.cols-8 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .row.cols-7 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .row.cols-4 { grid-template-columns: repeat(2, 1fr); }
   .row.cols-2 { grid-template-columns: 1fr; }
 }
+
+/* heatmap metric toggle */
+.heatmap-toggle {
+  display: inline-flex; gap: 0; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+}
+.heatmap-btn {
+  background: transparent; color: var(--muted); border: 0;
+  padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.heatmap-btn:hover { color: var(--text); }
+.heatmap-btn.is-active { background: var(--accent); color: #0A0E14; font-weight: 600; }
+.heatmap-btn + .heatmap-btn { border-left: 1px solid var(--border); }
+.kpi.active .value { color: var(--accent-2); }
 
 /* KPI */
 .kpi { padding: 16px; min-width: 0; }

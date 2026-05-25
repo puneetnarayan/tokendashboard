@@ -386,6 +386,69 @@ def connect(path: Union[str, Path]):
         conn.close()
 
 
+# Idle threshold for "active time" math. If two consecutive messages in a
+# session are more than this many seconds apart, the gap is dropped — we
+# assume the user walked away. Below the threshold, the gap counts as active
+# time. Matches WakaTime's default AFK timeout (10 min) and gives a
+# defensible lower bound on hands-on time without inflating wall-time.
+ACTIVE_GAP_THRESHOLD_S = 600
+
+
+def _active_seconds_sql(threshold_s: int, range_clause: str) -> str:
+    """Capped-gap summation expression. Returns SQL that computes
+    `active_seconds` per group via a LAG window over message timestamps."""
+    return f"""
+      WITH ordered AS (
+        SELECT session_id, project_slug, timestamp,
+               substr(timestamp, 1, 10) AS day,
+               LAG(timestamp) OVER (PARTITION BY session_id ORDER BY timestamp) AS prev_ts
+          FROM messages
+         WHERE timestamp IS NOT NULL {range_clause}
+      )
+      SELECT session_id, project_slug, day,
+             CASE
+               WHEN prev_ts IS NULL THEN 0.0
+               WHEN (julianday(timestamp) - julianday(prev_ts)) * 86400.0 > {threshold_s} THEN 0.0
+               ELSE (julianday(timestamp) - julianday(prev_ts)) * 86400.0
+             END AS gap_s
+        FROM ordered
+    """
+
+
+def _active_seconds_per_slug(conn, since=None, until=None,
+                             threshold_s: int = ACTIVE_GAP_THRESHOLD_S) -> dict:
+    """Map project_slug → active_seconds. Used by project_summary rollup."""
+    rng, args = _range_clause(since, until)
+    sql = f"SELECT project_slug, COALESCE(SUM(gap_s), 0) FROM ({_active_seconds_sql(threshold_s, rng)}) GROUP BY project_slug"
+    return {row[0]: row[1] for row in conn.execute(sql, args)}
+
+
+def total_active_seconds(db_path, since=None, until=None,
+                         threshold_s: int = ACTIVE_GAP_THRESHOLD_S) -> float:
+    """Scalar total of active-time across all sessions in the range. Powers
+    the 'Active time' KPI on the Overview tab.
+
+    Note: concurrent sessions in two terminals double-count — the data has
+    no way to detect 'only one window in focus'. Surface this caveat in the
+    UI tooltip; do not silently dedup, since we can't know which session
+    actually had your attention.
+    """
+    rng, args = _range_clause(since, until)
+    sql = f"SELECT COALESCE(SUM(gap_s), 0) FROM ({_active_seconds_sql(threshold_s, rng)})"
+    with connect(db_path) as c:
+        row = c.execute(sql, args).fetchone()
+        return float(row[0] or 0.0)
+
+
+def daily_active_seconds(db_path, since=None, until=None,
+                         threshold_s: int = ACTIVE_GAP_THRESHOLD_S) -> dict:
+    """Map YYYY-MM-DD → active_seconds. Powers the heatmap's hours toggle."""
+    rng, args = _range_clause(since, until)
+    sql = f"SELECT day, COALESCE(SUM(gap_s), 0) FROM ({_active_seconds_sql(threshold_s, rng)}) GROUP BY day"
+    with connect(db_path) as c:
+        return {row[0]: row[1] for row in c.execute(sql, args)}
+
+
 def _range_clause(since, until, col: str = "timestamp"):
     where, args = [], []
     if since:
@@ -788,7 +851,7 @@ def _host_per_slug(conn, slugs) -> dict:
     return {slug: max(lst, key=lambda x: x[1])[0] for slug, lst in by_slug.items()}
 
 
-def _rollup_projects(conn, rows) -> list:
+def _rollup_projects(conn, rows, active_secs_map=None) -> list:
     """Roll sub-path slugs into their parent, then merge cross-host duplicates.
 
     Sub-path roll-up: a slug becomes a child of an existing slug iff the parent
@@ -843,6 +906,7 @@ def _rollup_projects(conn, rows) -> list:
                 "sessions": 0, "turns": 0,
                 "input_tokens": 0, "output_tokens": 0,
                 "billable_tokens": 0, "cache_read_tokens": 0,
+                "active_seconds": 0.0,
                 "hosts": set(),
                 "contributing_slugs": [],
             }
@@ -850,6 +914,8 @@ def _rollup_projects(conn, rows) -> list:
         for k in ("sessions", "turns", "input_tokens", "output_tokens",
                   "billable_tokens", "cache_read_tokens"):
             g[k] += int(r.get(k) or 0)
+        if active_secs_map is not None:
+            g["active_seconds"] += float(active_secs_map.get(r["project_slug"], 0) or 0)
         h = host_of.get(r["project_slug"])
         if h: g["hosts"].add(h)
         g["contributing_slugs"].append(r["project_slug"])
@@ -864,6 +930,7 @@ def _rollup_projects(conn, rows) -> list:
         for k in ("sessions", "turns", "input_tokens", "output_tokens",
                   "billable_tokens", "cache_read_tokens"):
             b[k] += g[k]
+        b["active_seconds"] += g["active_seconds"]
         b["hosts"].update(g["hosts"])
         b["contributing_slugs"].extend(g["contributing_slugs"])
 
@@ -916,9 +983,11 @@ def project_summary(db_path, since=None, until=None) -> list:
                WHERE 1=1 {day_rng}
                GROUP BY p.project_slug
             """, (*sess_args, *day_args))]
-            return _rollup_projects(c, rows)
+            active = _active_seconds_per_slug(c, since=since, until=until)
+            return _rollup_projects(c, rows, active_secs_map=active)
         rows = [dict(r) for r in c.execute(sql, args)]
-        return _rollup_projects(c, rows)
+        active = _active_seconds_per_slug(c, since=since, until=until)
+        return _rollup_projects(c, rows, active_secs_map=active)
 
 
 def tool_token_breakdown(db_path, since=None, until=None) -> list:
@@ -998,7 +1067,7 @@ def session_turns(db_path, session_id: str) -> list:
 
 
 def daily_token_breakdown(db_path, since=None, until=None) -> list:
-    """One row per day: stacked bar data for input/output/cache_read/cache_create."""
+    """One row per day: stacked bar data + active_seconds for the heatmap toggle."""
     rng, args = _date_range_clause(since, until)
     sql = f"""
       SELECT substr(timestamp, 1, 10) AS day,
@@ -1013,9 +1082,14 @@ def daily_token_breakdown(db_path, since=None, until=None) -> list:
        ORDER BY day ASC
     """
     with connect(db_path) as c:
+        # Active seconds always reads from raw messages (the LAG window
+        # needs per-message timestamps that the daily summary doesn't
+        # carry). Join into both query paths so the heatmap toggle
+        # stays consistent regardless of summary state.
+        active_by_day = daily_active_seconds(db_path, since=since, until=until)
         if _summary_ready(c):
             day_rng, day_args = _date_range_clause(since, until, col="day")
-            return [dict(r) for r in c.execute(f"""
+            rows = [dict(r) for r in c.execute(f"""
               SELECT day,
                      input_tokens,
                      output_tokens,
@@ -1025,7 +1099,11 @@ def daily_token_breakdown(db_path, since=None, until=None) -> list:
                WHERE 1=1 {day_rng}
                ORDER BY day ASC
             """, day_args)]
-        return [dict(r) for r in c.execute(sql, args)]
+        else:
+            rows = [dict(r) for r in c.execute(sql, args)]
+        for r in rows:
+            r["active_seconds"] = float(active_by_day.get(r["day"], 0) or 0)
+        return rows
 
 
 def skill_breakdown(db_path, since=None, until=None) -> list:

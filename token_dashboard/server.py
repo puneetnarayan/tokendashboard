@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
 
 from .db import (
-    overview_totals, expensive_prompts, project_summary,
+    overview_totals, expensive_prompts, project_summary, total_active_seconds,
     tool_token_breakdown, recent_sessions, session_turns,
     daily_token_breakdown, model_breakdown, skill_breakdown,
     scan_status, search_prompts,
@@ -136,6 +136,7 @@ def _overview_bundle(db_path: str, since, until, pricing: dict) -> dict:
         if c["usd"] is not None:
             cost_usd += c["usd"]
     totals["cost_usd"] = round(cost_usd, 4)
+    totals["active_seconds"] = total_active_seconds(db_path, since, until)
 
     # Period-over-period: same-duration window immediately before `since`.
     # Compute the same scalar totals + cost so the UI can render +/-% deltas
@@ -151,6 +152,7 @@ def _overview_bundle(db_path: str, since, until, pricing: dict) -> dict:
             if c["usd"] is not None:
                 prev_cost += c["usd"]
         prev_totals["cost_usd"] = round(prev_cost, 4)
+        prev_totals["active_seconds"] = total_active_seconds(db_path, prev_since, prev_until)
 
     return {
         "totals": totals,

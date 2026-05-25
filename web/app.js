@@ -22,6 +22,18 @@ export const fmt = {
   },
   modelShort: m => (m || '').replace('claude-', ''),
   ts: t => t ? new Date(t).toLocaleString('sv', { timeZone: 'America/New_York' }).slice(0, 16) : '',
+  // Active-time formatter. Inputs are seconds (float). Below 1 min →
+  // "Ns". Below 1 h → "Nm". Below 99 h → "Nh Mm". Otherwise → "Nh".
+  duration: s => {
+    const sec = Math.round(s ?? 0);
+    if (sec < 60) return sec + 's';
+    const m = Math.floor(sec / 60);
+    if (m < 60) return m + 'm';
+    const h = Math.floor(m / 60);
+    const rem = m % 60;
+    if (h < 100) return h + 'h ' + (rem < 10 ? '0' + rem : rem) + 'm';
+    return h + 'h';
+  },
 };
 
 /**
