@@ -41,7 +41,7 @@ function renderPrompts(root, rows, sort) {
 
   root.innerHTML = `
     <div class="flex" style="margin-bottom:14px">
-      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">Prompts</h2>
+      <h2 style="margin:0;font-size:18px;letter-spacing:-0.01em">Prompts</h2>
       <div class="spacer"></div>
       ${sortTabs}
     </div>

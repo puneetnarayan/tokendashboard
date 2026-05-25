@@ -33,7 +33,7 @@ export default async function (root) {
             </tr>`).join('')}
         </tbody>
       </table>
-      <p class="muted" style="margin-top:8px;font-size:11px">Rates per 1M tokens, USD.</p>
+      <p class="muted" style="margin-top:8px;font-size:12px">Rates per 1M tokens, USD.</p>
 
       <hr class="divider">
 

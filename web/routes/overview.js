@@ -65,8 +65,8 @@ function renderBundle(root, { totals, projects, sessions, tools, daily, byModel 
 
   root.innerHTML = `
     <div class="flex" style="margin-bottom:14px">
-      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">Overview</h2>
-      <span class="muted" style="font-size:12px">${range.days ? `last ${range.days} days` : 'all time'}</span>
+      <h2 style="margin:0;font-size:18px;letter-spacing:-0.01em">Overview</h2>
+      <span class="muted" style="font-size:13px">${range.days ? `last ${range.days} days` : 'all time'}</span>
       <div class="spacer"></div>
       ${rangeTabs}
     </div>
@@ -86,7 +86,7 @@ function renderBundle(root, { totals, projects, sessions, tools, daily, byModel 
     </div>
 
     <details class="card glossary" style="margin-top:16px">
-      <summary><h3 style="display:inline-block;margin:0">What do these numbers mean?</h3><span class="muted" style="font-size:12px">— click to expand</span></summary>
+      <summary><h3 style="display:inline-block;margin:0">What do these numbers mean?</h3><span class="muted" style="font-size:13px">— click to expand</span></summary>
       <dl>
         <dt>Session</dt><dd>One run of Claude Code (from <code>claude</code> to exit). Each session is a single <code>.jsonl</code> file.</dd>
         <dt>Turn</dt><dd>One message you sent to Claude. Each turn triggers a response (possibly with tool calls in between).</dd>
@@ -101,12 +101,12 @@ function renderBundle(root, { totals, projects, sessions, tools, daily, byModel 
     <div class="row cols-2" style="margin-top:16px">
       <div class="card">
         <h3>Your daily work</h3>
-        <p class="muted" style="margin:-4px 0 10px;font-size:12px">Tokens you paid for: what you sent (<b>input</b>), what Claude wrote (<b>output</b>), and what got stored for re-use (<b>cache create</b>).</p>
+        <p class="muted" style="margin:-4px 0 10px;font-size:13px">Tokens you paid for: what you sent (<b>input</b>), what Claude wrote (<b>output</b>), and what got stored for re-use (<b>cache create</b>).</p>
         <div id="ch-daily-billable" style="height:260px"></div>
       </div>
       <div class="card">
         <h3>Daily cache reads</h3>
-        <p class="muted" style="margin:-4px 0 10px;font-size:12px"><b>Cache reads</b> are cheap re-uses of things Claude already saw (like your CLAUDE.md). They cost ~10× less than regular input tokens — high numbers here are a good thing.</p>
+        <p class="muted" style="margin:-4px 0 10px;font-size:13px"><b>Cache reads</b> are cheap re-uses of things Claude already saw (like your CLAUDE.md). They cost ~10× less than regular input tokens — high numbers here are a good thing.</p>
         <div id="ch-daily-cache" style="height:260px"></div>
       </div>
     </div>
@@ -115,7 +115,7 @@ function renderBundle(root, { totals, projects, sessions, tools, daily, byModel 
       <div class="card"><h3>Tokens by project</h3><div id="ch-projects" style="height:320px"></div></div>
       <div class="card">
         <h3>Token usage by model</h3>
-        <p class="muted" style="margin:-4px 0 4px;font-size:12px">Share of billable tokens per Claude model.</p>
+        <p class="muted" style="margin:-4px 0 4px;font-size:13px">Share of billable tokens per Claude model.</p>
         <div id="ch-model" style="height:300px"></div>
       </div>
     </div>
@@ -123,7 +123,7 @@ function renderBundle(root, { totals, projects, sessions, tools, daily, byModel 
     <div class="row cols-2" style="margin-top:16px">
       <div class="card"><h3>Top tools (by call count)</h3><div id="ch-tools" style="height:320px"></div></div>
       <div class="card">
-        <h3 style="display:flex;align-items:center"><span>Recent sessions</span><span class="spacer"></span><a href="#/sessions" style="font-weight:400;font-size:12px">all →</a></h3>
+        <h3 style="display:flex;align-items:center"><span>Recent sessions</span><span class="spacer"></span><a href="#/sessions" style="font-weight:400;font-size:13px">all →</a></h3>
         <table>
           <thead><tr><th>started</th><th>project</th><th class="num">tokens</th></tr></thead>
           <tbody>

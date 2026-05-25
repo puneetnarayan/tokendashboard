@@ -20,7 +20,7 @@
 html, body {
   background: var(--bg); color: var(--text);
   margin: 0; padding: 0;
-  font-family: var(--sans); font-size: 13px; line-height: 1.55;
+  font-family: var(--sans); font-size: 14px; line-height: 1.55;
   font-feature-settings: 'cv11', 'ss01';
   -webkit-font-smoothing: antialiased;
 }
@@ -38,7 +38,7 @@ header.topbar {
   backdrop-filter: saturate(180%) blur(8px);
 }
 .topbar .brand {
-  font-weight: 600; letter-spacing: -0.01em; font-size: 14px;
+  font-weight: 600; letter-spacing: -0.01em; font-size: 15px;
   display: flex; align-items: center; gap: 8px;
 }
 .topbar .brand::before {
@@ -48,8 +48,8 @@ header.topbar {
 }
 .topbar nav { display: flex; gap: 2px; margin-left: 12px; }
 .topbar nav a {
-  padding: 5px 10px; border-radius: 6px;
-  color: var(--muted); font-size: 13px; font-weight: 500;
+  padding: 6px 11px; border-radius: 6px;
+  color: var(--muted); font-size: 14px; font-weight: 500;
   text-transform: capitalize;
   transition: color 120ms, background 120ms;
 }
@@ -58,14 +58,14 @@ header.topbar {
 
 .topbar .spacer { margin-left: auto; }
 .topbar .pill {
-  padding: 4px 10px; border-radius: 6px;
+  padding: 5px 11px; border-radius: 6px;
   background: var(--panel-2); border: 1px solid var(--border);
-  color: var(--muted); font-size: 12px; font-family: var(--mono);
+  color: var(--muted); font-size: 13px; font-family: var(--mono);
 }
 
 .host-pill {
-  display: inline-block; padding: 2px 8px; border-radius: 4px;
-  font-size: 11px; font-family: var(--mono); text-transform: uppercase;
+  display: inline-block; padding: 3px 9px; border-radius: 4px;
+  font-size: 12px; font-family: var(--mono); text-transform: uppercase;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
 }
 .host-pill.host-jlap     { background: #1d3a52; border-color: #2d5a82; color: #8ecde6; }
@@ -98,8 +98,8 @@ main#app { padding: 24px 20px; max-width: 1400px; margin: 0 auto; }
   border-radius: 10px;
   padding: 18px;
 }
-.card h2 { margin: 0 0 14px; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
-.card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--text); }
+.card h2 { margin: 0 0 14px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+.card h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--text); }
 
 /* layout */
 .row { display: grid; gap: 16px; }
@@ -120,32 +120,32 @@ main#app { padding: 24px 20px; max-width: 1400px; margin: 0 auto; }
 .kpi { padding: 16px; min-width: 0; }
 .kpi .label {
   color: var(--muted); text-transform: uppercase;
-  font-size: 10px; letter-spacing: 0.08em; font-weight: 600;
+  font-size: 11px; letter-spacing: 0.08em; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .kpi .value {
-  font-family: var(--mono); font-size: 22px; font-weight: 500;
+  font-family: var(--mono); font-size: 24px; font-weight: 500;
   font-variant-numeric: tabular-nums; letter-spacing: -0.03em;
   margin-top: 6px; line-height: 1.1;
   white-space: nowrap;
 }
 .kpi.cost .value { color: var(--good); }
 /* compact tokens like "4.1B" are short — give them a touch more room */
-.kpi .value.big { font-size: 24px; }
-.kpi .delta { font-family: var(--mono); font-size: 12px; margin-top: 4px; }
+.kpi .value.big { font-size: 26px; }
+.kpi .delta { font-family: var(--mono); font-size: 13px; margin-top: 4px; }
 .kpi .delta.up   { color: var(--good); }
 .kpi .delta.down { color: var(--bad);  }
-.kpi .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.kpi .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 
 /* tables */
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td {
-  text-align: left; padding: 9px 12px;
+  text-align: left; padding: 10px 12px;
   border-bottom: 1px solid var(--border);
 }
 th {
   color: var(--muted); font-weight: 600;
-  text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em;
+  text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em;
 }
 tbody tr { transition: background 100ms; }
 tbody tr:hover { background: var(--panel-2); }
@@ -169,7 +169,7 @@ th.sort-desc::after { content: ' ▼'; width: auto; color: var(--accent); }
 /* badges */
 .badge {
   display: inline-block; padding: 2px 7px; border-radius: 4px;
-  font-size: 11px; background: var(--panel-2); color: var(--muted);
+  font-size: 12px; background: var(--panel-2); color: var(--muted);
   border: 1px solid var(--border);
   font-family: var(--mono); font-weight: 500;
 }
@@ -183,15 +183,15 @@ th.sort-desc::after { content: ' ▼'; width: auto; color: var(--accent); }
   font-family: var(--mono); white-space: pre-wrap; word-break: break-word;
   background: var(--bg); padding: 12px; border-radius: 6px;
   border: 1px solid var(--border);
-  max-height: 400px; overflow-y: auto;
-  font-size: 12px; line-height: 1.5;
+  max-height: 420px; overflow-y: auto;
+  font-size: 13px; line-height: 1.55;
 }
 
 /* buttons */
 button, select {
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px;
-  padding: 6px 12px; font-family: var(--sans); font-size: 13px;
+  padding: 7px 12px; font-family: var(--sans); font-size: 14px;
   cursor: pointer;
 }
 button:hover, select:hover { border-color: var(--border-2); }
@@ -205,23 +205,23 @@ button.ghost { background: transparent; color: var(--muted); }
   padding: 14px; margin: 10px 0; background: var(--panel-2);
 }
 .tip-head { display: flex; align-items: center; gap: 10px; }
-.tip-head strong { font-size: 13px; }
+.tip-head strong { font-size: 14px; }
 .tip-body { margin: 8px 0 0; color: var(--muted); }
 
 /* time-range tabs */
 .range-tabs { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
 .range-tabs button {
-  background: transparent; border: 0; padding: 4px 10px; border-radius: 4px;
-  color: var(--muted); font-size: 12px; font-family: var(--mono);
+  background: transparent; border: 0; padding: 5px 11px; border-radius: 4px;
+  color: var(--muted); font-size: 13px; font-family: var(--mono);
 }
 .range-tabs button.active { background: var(--bg); color: var(--text); }
 
 /* refresh button + countdown */
 .refresh-btn {
-  padding: 4px 10px; border-radius: 6px;
+  padding: 5px 11px; border-radius: 6px;
   background: var(--panel-2); border: 1px solid var(--border);
-  color: var(--muted); font-family: var(--mono); font-size: 12px;
-  cursor: pointer; min-width: 68px; text-align: center;
+  color: var(--muted); font-family: var(--mono); font-size: 13px;
+  cursor: pointer; min-width: 72px; text-align: center;
   transition: color 120ms, border-color 120ms;
 }
 .refresh-btn:hover { color: var(--text); border-color: var(--border-2); }
@@ -232,9 +232,9 @@ button.ghost { background: transparent; color: var(--muted); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .refresh-banner {
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 7px 20px;
+  padding: 8px 20px;
   background: var(--panel); border-bottom: 1px solid var(--border);
-  color: var(--muted); font-size: 12px;
+  color: var(--muted); font-size: 13px;
 }
 .refresh-banner.hidden { display: none; }
 .refresh-banner .spin, .spin {
@@ -285,11 +285,11 @@ hr.divider { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
   grid-template-columns: 160px 1fr; gap: 10px 20px;
 }
 .glossary dt {
-  color: var(--text); font-weight: 600; font-size: 12px;
+  color: var(--text); font-weight: 600; font-size: 13px;
   text-transform: uppercase; letter-spacing: 0.04em;
 }
-.glossary dd { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
-.glossary dd code { background: var(--panel-2); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 12px; }
+.glossary dd { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.glossary dd code { background: var(--panel-2); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 13px; }
 @media (max-width: 720px) {
   .glossary dl { grid-template-columns: 1fr; gap: 4px 0; }
   .glossary dt { margin-top: 10px; }

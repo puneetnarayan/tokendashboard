@@ -52,8 +52,8 @@ function renderSkills(root, skills, range) {
 
   root.innerHTML = `
     <div class="flex" style="margin-bottom:14px">
-      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">Skills</h2>
-      <span class="muted" style="font-size:12px">${range.days ? `last ${range.days} days` : 'all time'}</span>
+      <h2 style="margin:0;font-size:18px;letter-spacing:-0.01em">Skills</h2>
+      <span class="muted" style="font-size:13px">${range.days ? `last ${range.days} days` : 'all time'}</span>
       <div class="spacer"></div>
       ${rangeTabs}
     </div>
@@ -70,7 +70,7 @@ function renderSkills(root, skills, range) {
 
     <div class="card" style="margin-top:16px">
       <h3>All skills</h3>
-      <p class="muted" style="margin:-4px 0 14px;font-size:12px">"Tokens per call" is the size of the skill's <code>SKILL.md</code> file — what Claude Code loads into context each time the skill is invoked.</p>
+      <p class="muted" style="margin:-4px 0 14px;font-size:13px">"Tokens per call" is the size of the skill's <code>SKILL.md</code> file — what Claude Code loads into context each time the skill is invoked.</p>
       <table id="skills-table">
         <thead><tr>
           <th>skill</th>
