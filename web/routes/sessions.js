@@ -33,12 +33,12 @@ function buildList(root, list, qs) {
         <tbody>
           ${list.map(s => `
             <tr>
-              <td class="mono" data-val="${s.started || ''}">${fmt.ts(s.started)}</td>
+              <td class="mono" data-val="${fmt.htmlSafe(s.started || '')}">${fmt.ts(s.started)}</td>
               <td data-val="${fmt.htmlSafe(s.host || '')}"><span class="host-pill host-${fmt.htmlSafe(s.host || 'unknown')}">${fmt.htmlSafe(s.host || '—')}</span></td>
               <td data-val="${fmt.htmlSafe(s.project_name || s.project_slug)}" title="${fmt.htmlSafe(s.project_slug)}">${fmt.htmlSafe(s.project_name || s.project_slug)}</td>
               <td class="num" data-val="${s.turns || 0}">${fmt.int(s.turns)}</td>
               <td class="num" data-val="${s.tokens || 0}">${fmt.int(s.tokens)}</td>
-              <td data-val="${s.session_id || ''}"><a href="#/sessions/${encodeURIComponent(s.session_id)}" class="mono">${fmt.htmlSafe(s.session_id.slice(0,8))}…</a></td>
+              <td data-val="${fmt.htmlSafe(s.session_id || '')}"><a href="#/sessions/${encodeURIComponent(s.session_id)}" class="mono">${fmt.htmlSafe(s.session_id.slice(0,8))}…</a></td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -107,7 +107,7 @@ function buildSession(root, id, turns, initFilter, initCol, initDir) {
         <span class="spacer"></span>
         <a href="#/sessions" class="muted">← all sessions</a>
       </h2>
-      <div class="flex muted" style="font-family:var(--mono);font-size:12px;flex-wrap:wrap;gap:14px">
+      <div class="flex muted" style="font-family:var(--mono);font-size:13px;flex-wrap:wrap;gap:14px">
         <span>${fmt.htmlSafe(project)}</span>
         <span>${fmt.ts(started)} → ${fmt.ts(ended)}</span>
         <span>${turns.length} records</span>
@@ -120,7 +120,7 @@ function buildSession(root, id, turns, initFilter, initCol, initDir) {
         <h3 style="margin:0">Turn-by-turn</h3>
         <div class="spacer"></div>
         <div class="flex" style="gap:6px;flex-wrap:wrap;align-items:center">
-          <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em">show:</span>
+          <span class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.06em">show:</span>
           <div class="range-tabs" id="turn-filters" role="group">
             ${filterDefs.map(f => `<button data-filter="${f.key}" class="${f.key === initFilter ? 'active' : ''}">${f.label}</button>`).join('')}
           </div>
@@ -142,9 +142,9 @@ function buildSession(root, id, turns, initFilter, initCol, initDir) {
             const tout = t.output_tokens      || 0;
             const trd  = t.cache_read_tokens  || 0;
             return `<tr data-tin="${tin}" data-tout="${tout}" data-trd="${trd}">
-              <td class="mono" data-val="${t.timestamp || ''}">${(t.timestamp || '').slice(11,19)}</td>
-              <td data-val="${t.type || ''}">${t.type}${t.is_sidechain ? ' <span class="badge">side</span>' : ''}</td>
-              <td data-val="${t.model || ''}">${t.model ? `<span class="badge ${fmt.modelClass(t.model)}">${fmt.htmlSafe(fmt.modelShort(t.model))}</span>` : ''}</td>
+              <td class="mono" data-val="${fmt.htmlSafe(t.timestamp || '')}">${fmt.htmlSafe((t.timestamp || '').slice(11,19))}</td>
+              <td data-val="${fmt.htmlSafe(t.type || '')}">${fmt.htmlSafe(t.type || '')}${t.is_sidechain ? ' <span class="badge">side</span>' : ''}</td>
+              <td data-val="${fmt.htmlSafe(t.model || '')}">${t.model ? `<span class="badge ${fmt.modelClass(t.model)}">${fmt.htmlSafe(fmt.modelShort(t.model))}</span>` : ''}</td>
               <td class="blur-sensitive" data-val="">${fmt.htmlSafe(summary)}</td>
               <td class="num" data-val="${tin}">${fmt.int(tin)}</td>
               <td class="num" data-val="${tout}">${fmt.int(tout)}</td>

@@ -1,4 +1,5 @@
 import { api, fmt } from '/web/app.js';
+import { mountChart } from '/web/charts.js';
 
 // Sonnet base input price — actual savings vary with cache hits
 const USD_PER_TOKEN = 3 / 1_000_000;
@@ -83,7 +84,7 @@ export default async function (root) {
 
   const hosts = Array.isArray(data.hosts) ? data.hosts : [];
   const hostStrip = hosts.length
-    ? `<div class="muted" style="font-size:12px;margin-bottom:12px">
+    ? `<div class="muted" style="font-size:13px;margin-bottom:12px">
          Aggregated across ${hosts.length} ${hosts.length === 1 ? 'host' : 'hosts'}:
          ${hosts.map(h => {
            const label = h === 'local' ? 'jlap (local)' : h;
@@ -96,39 +97,39 @@ export default async function (root) {
     ${hostStrip}
     <div class="row" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
       <div class="card">
-        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">All-Time Saved</div>
+        <div class="muted" style="font-size:13px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">All-Time Saved</div>
         <div style="font-size:28px;font-weight:700;color:var(--good);font-family:var(--mono)">${fmt.compact(s.total_saved)}</div>
-        <div class="muted" style="font-size:11px">tokens</div>
+        <div class="muted" style="font-size:13px">tokens</div>
       </div>
       <div class="card">
-        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">This Month</div>
+        <div class="muted" style="font-size:13px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">This Month</div>
         <div style="font-size:28px;font-weight:700;color:var(--good);font-family:var(--mono)">${fmt.compact(lastMonth?.saved_tokens ?? 0)}</div>
-        <div class="muted" style="font-size:11px">tokens</div>
+        <div class="muted" style="font-size:13px">tokens</div>
       </div>
       <div class="card">
-        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Today</div>
+        <div class="muted" style="font-size:13px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Today</div>
         <div style="font-size:28px;font-weight:700;color:var(--accent);font-family:var(--mono)">${fmt.compact(todayRow?.saved_tokens ?? 0)}</div>
-        <div class="muted" style="font-size:11px">tokens</div>
+        <div class="muted" style="font-size:13px">tokens</div>
       </div>
       <div class="card">
-        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Avg Compression</div>
+        <div class="muted" style="font-size:13px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Avg Compression</div>
         <div style="font-size:28px;font-weight:700;color:var(--accent);font-family:var(--mono)">${s.avg_savings_pct.toFixed(0)}%</div>
-        <div class="muted" style="font-size:11px">${fmt.int(s.total_commands)} commands processed</div>
+        <div class="muted" style="font-size:13px">${fmt.int(s.total_commands)} commands processed</div>
       </div>
     </div>
 
     <div class="row" style="grid-template-columns:1fr 1fr;margin-bottom:16px">
       <div class="card" style="display:flex;flex-direction:column;justify-content:center">
-        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Est. API Cost Saved</div>
+        <div class="muted" style="font-size:13px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Est. API Cost Saved</div>
         <div style="font-size:40px;font-weight:700;color:var(--good);font-family:var(--mono);line-height:1">${toUsd(s.total_saved)}</div>
-        <div class="muted" style="font-size:11px;margin-top:6px">Sonnet · $3 / MTok input · base pricing</div>
-        <div class="muted" style="font-size:11px">Actual savings higher with cache hits</div>
+        <div class="muted" style="font-size:13px;margin-top:6px">Sonnet · $3 / MTok input · base pricing</div>
+        <div class="muted" style="font-size:13px">Actual savings higher with cache hits</div>
       </div>
       <div class="card">
-        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Monthly Breakdown</div>
+        <div class="muted" style="font-size:13px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Monthly Breakdown</div>
         <table style="width:100%;border-collapse:collapse">
           <thead>
-            <tr style="color:var(--muted-2);font-size:11px;text-transform:uppercase;letter-spacing:.06em">
+            <tr style="color:var(--muted-2);font-size:13px;text-transform:uppercase;letter-spacing:.06em">
               <th style="text-align:left;padding:0 0 6px">Month</th>
               <th style="text-align:right;padding:0 0 6px">Saved</th>
               <th style="text-align:right;padding:0 0 6px">%</th>
@@ -139,7 +140,7 @@ export default async function (root) {
           <tbody>
             ${data.monthly.map(m => `
               <tr style="border-top:1px solid var(--border)">
-                <td style="padding:6px 0;font-family:var(--mono);font-size:12px">${m.month}</td>
+                <td style="padding:6px 0;font-family:var(--mono);font-size:13px">${m.month}</td>
                 <td style="padding:6px 0;text-align:right;color:var(--good)">${fmt.compact(m.saved_tokens)}</td>
                 <td style="padding:6px 0;text-align:right">${m.savings_pct.toFixed(0)}%</td>
                 <td style="padding:6px 0;text-align:right;color:var(--muted)">${fmt.int(m.commands)}</td>
@@ -153,7 +154,7 @@ export default async function (root) {
     <div class="card">
       <div class="flex" style="margin-bottom:14px;align-items:center">
         <h2 style="margin:0">Daily Savings — ${rangeLabel}</h2>
-        <span class="muted" style="font-size:12px;margin-left:12px">
+        <span class="muted" style="font-size:13px;margin-left:12px">
           ${fmt.compact(rangeSaved)} tokens saved · ${fmt.int(rangeCmds)} cmds · ${rangePct.toFixed(0)}% · ${toUsd(rangeSaved)}
         </span>
         <div class="spacer"></div>
@@ -166,8 +167,11 @@ export default async function (root) {
     btn.addEventListener('click', () => writeRange(btn.dataset.range));
   });
 
-  const chart = echarts.init(root.querySelector('#rtk-chart'), 'dark');
-  chart.setOption({
+  // Use mountChart() so the instance + its ResizeObserver are tracked and
+  // get disposed by disposeMountedCharts() when the user navigates away —
+  // raw echarts.init() + a window resize listener leaked one of each per
+  // visit to this route.
+  mountChart(root.querySelector('#rtk-chart'), {
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',
@@ -220,6 +224,4 @@ export default async function (root) {
       },
     ],
   });
-
-  window.addEventListener('resize', () => chart.resize());
 }

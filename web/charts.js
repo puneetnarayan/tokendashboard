@@ -62,6 +62,16 @@ function mount(el) {
   return c;
 }
 
+// Public mount() so route modules that need a non-wrapped ECharts instance
+// (e.g. rtk.js with its bar+line composite) get the same tracking as the
+// helpers below — every chart goes through disposeMountedCharts() on
+// route teardown, no per-route resize-listener leaks.
+export function mountChart(el, opts) {
+  const c = mount(el);
+  if (opts) c.setOption(opts);
+  return c;
+}
+
 const NO_ANIM = { animation: false };
 
 export function lineChart(el, { x, series }) {

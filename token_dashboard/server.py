@@ -305,8 +305,13 @@ def _rtk_payload(home=None) -> dict:
 
 def _serve_static(handler, rel: str) -> None:
     rel = rel.lstrip("/")
-    p = (WEB_ROOT / rel).resolve()
-    if not str(p).startswith(str(WEB_ROOT.resolve())) or not p.is_file():
+    web_root = WEB_ROOT.resolve()
+    p = (web_root / rel).resolve()
+    # is_relative_to is the path-correct containment test. A naive
+    # startswith() on the stringified absolute path would accept a
+    # sibling whose name shares the WEB_ROOT prefix (e.g. /home/dvids/
+    # Dev/token-dashboard/web vs .../web-other).
+    if not p.is_relative_to(web_root) or not p.is_file():
         handler.send_response(404)
         handler.end_headers()
         return
