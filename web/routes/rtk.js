@@ -3,9 +3,32 @@ import { api, fmt } from '/web/app.js';
 // Sonnet base input price — actual savings vary with cache hits
 const USD_PER_TOKEN = 3 / 1_000_000;
 
+const RANGES = [
+  { key: '7d',  label: '7d',  days: 7 },
+  { key: '30d', label: '30d', days: 30 },
+  { key: '90d', label: '90d', days: 90 },
+  { key: 'all', label: 'All', days: null },
+];
+
+function readRange() {
+  const q = (location.hash.split('?')[1] || '');
+  const m = /(?:^|&)range=([^&]+)/.exec(q);
+  const k = m && decodeURIComponent(m[1]);
+  return RANGES.find(r => r.key === k) || RANGES[1]; // default 30d
+}
+
+function writeRange(key) {
+  const base = (location.hash.replace(/^#/, '').split('?')[0]) || '/rtk';
+  location.hash = '#' + base + '?range=' + encodeURIComponent(key);
+}
+
 function toUsd(tokens) {
   const n = (tokens ?? 0) * USD_PER_TOKEN;
-  return n < 0.01 ? '$' + n.toFixed(4) : '$' + n.toFixed(2);
+  const fractionDigits = n < 0.01 ? 4 : 2;
+  return '$' + n.toLocaleString('en-US', {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
 }
 
 function today() {
@@ -45,7 +68,18 @@ export default async function (root) {
 
   const todayRow  = data.daily.find(d => d.date === today());
   const lastMonth = data.monthly[data.monthly.length - 1];
-  const days      = data.daily.slice(-30);
+  const range     = readRange();
+  const days      = range.days ? data.daily.slice(-range.days) : data.daily;
+  // Range-specific roll-up (the cards above stay all-time-correct).
+  const rangeSaved   = days.reduce((a, d) => a + (d.saved_tokens   || 0), 0);
+  const rangeInput   = days.reduce((a, d) => a + (d.input_tokens   || 0), 0);
+  const rangeCmds    = days.reduce((a, d) => a + (d.commands       || 0), 0);
+  const rangePct     = rangeInput ? (rangeSaved / rangeInput) * 100 : 0;
+  const rangeTabsHtml = `
+    <div class="range-tabs" role="tablist">
+      ${RANGES.map(r => `<button data-range="${r.key}" class="${r.key === range.key ? 'active' : ''}">${r.label}</button>`).join('')}
+    </div>`;
+  const rangeLabel = range.days ? `Last ${range.days} Days` : 'All Time';
 
   const hosts = Array.isArray(data.hosts) ? data.hosts : [];
   const hostStrip = hosts.length
@@ -117,9 +151,20 @@ export default async function (root) {
     </div>
 
     <div class="card">
-      <h2>Daily Savings — Last ${days.length} Days</h2>
+      <div class="flex" style="margin-bottom:14px;align-items:center">
+        <h2 style="margin:0">Daily Savings — ${rangeLabel}</h2>
+        <span class="muted" style="font-size:12px;margin-left:12px">
+          ${fmt.compact(rangeSaved)} tokens saved · ${fmt.int(rangeCmds)} cmds · ${rangePct.toFixed(0)}% · ${toUsd(rangeSaved)}
+        </span>
+        <div class="spacer"></div>
+        ${rangeTabsHtml}
+      </div>
       <div id="rtk-chart" style="height:240px"></div>
     </div>`;
+
+  root.querySelectorAll('.range-tabs button').forEach(btn => {
+    btn.addEventListener('click', () => writeRange(btn.dataset.range));
+  });
 
   const chart = echarts.init(root.querySelector('#rtk-chart'), 'dark');
   chart.setOption({
