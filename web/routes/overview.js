@@ -115,6 +115,7 @@ function renderBundle(root, bundle, range) {
         <span class="heatmap-toggle" role="group" aria-label="Heatmap metric">
           <button type="button" data-metric="tokens" class="heatmap-btn is-active">Tokens</button>
           <button type="button" data-metric="hours"  class="heatmap-btn">Hours</button>
+          <button type="button" data-metric="hod"    class="heatmap-btn" title="Hour-of-day grid: when in the day you actually work">Hour of day</button>
         </span>
       </h3>
       <div id="ch-heatmap" style="overflow-x:auto"></div>
@@ -246,9 +247,12 @@ function planSubtitle() {
   return `<div class="sub">pay $${p.monthly}/mo on ${fmt.htmlSafe(p.label)}</div>`;
 }
 
-// ── Calendar heatmap (last 365 days) ─────────────────────────────────────────
+// ── Calendar / hour-of-day heatmap ──────────────────────────────────────────
 async function renderHeatmap(host, metric = 'tokens', caption = null) {
   if (!host) return;
+  if (metric === 'hod') {
+    return renderHourOfDay(host, caption);
+  }
   const since = new Date(Date.now() - 365 * 86400_000).toISOString();
   const cacheKey = '/api/daily?since=' + encodeURIComponent(since);
   let daily = cacheGet(cacheKey);
@@ -313,5 +317,54 @@ async function renderHeatmap(host, metric = 'tokens', caption = null) {
   const h = 7 * (cellSize + cellGap) + 18;
   host.innerHTML = `<svg width="${w}" height="${h}" viewBox="-26 -14 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
     ${months.join('')}${dayLabels}${cells.join('')}
+  </svg>`;
+}
+
+// 24 × 7 grid: hour-of-day × day-of-week active-time heatmap. Answers
+// "when do I actually work?" — reveals deep-work bands and dead zones
+// (e.g. nobody works at 4 AM on Sunday, but Tuesday at 10 AM is hot).
+async function renderHourOfDay(host, caption) {
+  const since = new Date(Date.now() - 365 * 86400_000).toISOString();
+  const cacheKey = '/api/hour-of-day?since=' + encodeURIComponent(since);
+  let data = cacheGet(cacheKey);
+  if (!data) {
+    data = await api(cacheKey);
+    cacheSet(cacheKey, data);
+  }
+  if (caption) {
+    caption.textContent = 'hour × day-of-week · darker = more hands-on time';
+  }
+  const grid = data.grid || [];
+  const dowLabels = data.labels_dow || ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const cellSize = 18, cellGap = 3;
+  let max = 1;
+  for (const row of grid) for (const v of row) if (v > max) max = v;
+  const cells = [];
+  // Reorder rows so Monday is first (common reading order in EN-CA).
+  const dowOrder = [1, 2, 3, 4, 5, 6, 0];
+  for (let r = 0; r < 7; r++) {
+    const dow = dowOrder[r];
+    for (let h = 0; h < 24; h++) {
+      const v = grid[dow]?.[h] || 0;
+      const intensity = v === 0 ? 0 : Math.max(0.18, Math.min(1, Math.log10(v + 1) / Math.log10(max + 1)));
+      const fill = v === 0 ? 'rgba(255,255,255,0.04)' : `rgba(124,92,255,${intensity.toFixed(2)})`;
+      const x = h * (cellSize + cellGap);
+      const y = r * (cellSize + cellGap);
+      const hours = (v / 3600).toFixed(1);
+      cells.push(`<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" rx="3" fill="${fill}"><title>${dowLabels[dow]} ${h}:00 — ${hours}h</title></rect>`);
+    }
+  }
+  const dowText = dowOrder.map((dow, r) => {
+    const y = r * (cellSize + cellGap) + cellSize - 4;
+    return `<text x="-8" y="${y}" fill="#5A6573" font-size="11" font-family="Inter" text-anchor="end">${dowLabels[dow]}</text>`;
+  }).join('');
+  const hourText = [0, 6, 12, 18, 23].map(h => {
+    const x = h * (cellSize + cellGap) + cellSize / 2;
+    return `<text x="${x}" y="-6" fill="#5A6573" font-size="11" font-family="Inter" text-anchor="middle">${h}:00</text>`;
+  }).join('');
+  const w = 24 * (cellSize + cellGap) + 50;
+  const h = 7 * (cellSize + cellGap) + 24;
+  host.innerHTML = `<svg width="${w}" height="${h}" viewBox="-44 -18 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
+    ${hourText}${dowText}${cells.join('')}
   </svg>`;
 }

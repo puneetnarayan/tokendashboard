@@ -1,4 +1,5 @@
 import { api, fmt, cacheGet, cacheSet, showToast } from '/web/app.js';
+import { stackedBarChart } from '/web/charts.js';
 
 // Range presets in the Clients tab. "this month" and "last month" are
 // calendar-month based (not rolling 30 days) so an invoice for "May"
@@ -33,22 +34,43 @@ function setRange(key) {
   location.hash = '#/clients?range=' + encodeURIComponent(key);
 }
 
+function rangeQs(range) {
+  const parts = [];
+  if (range.since) parts.push('since=' + encodeURIComponent(range.since));
+  if (range.until) parts.push('until=' + encodeURIComponent(range.until));
+  return parts.length ? '?' + parts.join('&') : '';
+}
+
+async function fetchAll(range) {
+  const qs = rangeQs(range);
+  const urls = ['/api/clients-summary' + qs,
+                '/api/clients-velocity' + qs,
+                '/api/phase-breakdown' + qs,
+                '/api/digest' + qs];
+  const results = await Promise.all(urls.map(async u => {
+    const cached = cacheGet(u);
+    if (cached) return cached;
+    const fresh = await api(u);
+    cacheSet(u, fresh);
+    return fresh;
+  }));
+  return {
+    summary:   results[0],
+    velocity:  results[1],
+    phases:    results[2],
+    digest:    results[3],
+  };
+}
+
 export default async function (root) {
   const preset = currentPreset();
   const range = preset.fn();
-  const url = '/api/clients-summary'
-    + (range.since ? '?since=' + encodeURIComponent(range.since) : '')
-    + (range.until ? (range.since ? '&' : '?') + 'until=' + encodeURIComponent(range.until) : '');
-
-  let data = cacheGet(url);
-  if (!data) {
-    try { data = await api(url); cacheSet(url, data); }
-    catch (e) {
-      root.innerHTML = `<div class="card"><p class="muted">Failed to load clients: ${fmt.htmlSafe(String(e))}</p></div>`;
-      return;
-    }
+  let data;
+  try { data = await fetchAll(range); }
+  catch (e) {
+    root.innerHTML = `<div class="card"><p class="muted">Failed to load clients: ${fmt.htmlSafe(String(e))}</p></div>`;
+    return;
   }
-
   render(root, data, preset, range);
 }
 
@@ -57,9 +79,10 @@ function render(root, data, preset, range) {
     `<button data-preset="${p.key}" class="${p.key === preset.key ? 'active' : ''}">${p.label}</button>`
   ).join('');
 
-  const totalHours = data.clients.reduce((a, c) => a + (c.active_seconds || 0), 0) / 3600;
-  const totalAmount = data.clients.reduce((a, c) => a + (c.billable_amount || 0), 0);
-  const billableCount = data.clients.filter(c => c.billable_amount != null).length;
+  const summary = data.summary;
+  const totalHours = summary.clients.reduce((a, c) => a + (c.active_seconds || 0), 0) / 3600;
+  const totalAmount = summary.clients.reduce((a, c) => a + (c.billable_amount || 0), 0);
+  const billableCount = summary.clients.filter(c => c.billable_amount != null).length;
 
   root.innerHTML = `
     <div class="flex" style="margin-bottom:14px">
@@ -72,14 +95,37 @@ function render(root, data, preset, range) {
 
     <div class="row cols-4" style="margin-bottom:16px">
       <div class="card kpi"><div class="label">Total active</div><div class="value">${fmt.duration(totalHours * 3600)}</div></div>
-      <div class="card kpi"><div class="label">Active clients</div><div class="value">${fmt.int(data.clients.filter(c => c.active_seconds > 0).length)}</div></div>
-      <div class="card kpi"><div class="label">Unassigned hrs</div><div class="value">${fmt.duration(data.unassigned.reduce((a,p)=>a+(p.active_seconds||0),0))}</div></div>
+      <div class="card kpi"><div class="label">Active clients</div><div class="value">${fmt.int(summary.clients.filter(c => c.active_seconds > 0).length)}</div></div>
+      <div class="card kpi"><div class="label">Unassigned hrs</div><div class="value">${fmt.duration(summary.unassigned.reduce((a,p)=>a+(p.active_seconds||0),0))}</div></div>
       <div class="card kpi"><div class="label">Est. billable</div><div class="value">${totalAmount > 0 ? '$' + totalAmount.toLocaleString('en-US', {maximumFractionDigits: 0}) : '—'}</div><div class="sub">${billableCount} priced client${billableCount === 1 ? '' : 's'}</div></div>
     </div>
 
-    ${data.clients.length === 0 ? emptyState() : clientTable(data.clients, range)}
-    ${data.unassigned.length > 0 ? unassignedSection(data.unassigned) : ''}
-    ${data.excluded.length > 0 ? excludedSection(data.excluded) : ''}
+    ${summary.clients.length === 0 ? emptyState() : clientTable(summary.clients, range)}
+
+    ${data.velocity.weeks.length > 0 ? `
+      <div class="card" style="margin-top:16px">
+        <h3>Weekly hours by client</h3>
+        <p class="muted" style="margin:-6px 0 10px;font-size:13px">Stacked active hours per ISO week. Surfaces sprints, dry spells, and which client is currently load-bearing.</p>
+        <div id="ch-velocity" style="height:320px"></div>
+      </div>` : ''}
+
+    ${data.phases.projects.length > 0 ? `
+      <div class="card" style="margin-top:16px">
+        <h3>Session phase mix by project</h3>
+        <p class="muted" style="margin:-6px 0 10px;font-size:13px">
+          Each session's dominant tool category becomes its phase:
+          <span class="badge" style="background:#1d3a52;border-color:#2d5a82">build</span> Write/Edit-heavy ·
+          <span class="badge" style="background:#523a1d;border-color:#82542d">ops</span> Bash-heavy ·
+          <span class="badge" style="background:#1d4a3a;border-color:#2d825a">research</span> Read/Grep ·
+          <span class="badge" style="background:#2d2d52;border-color:#4a4a82">chat</span> no-tools.
+        </p>
+        <div id="ch-phases" style="height:${Math.min(420, data.phases.projects.length * 28 + 60)}px"></div>
+      </div>` : ''}
+
+    ${digestSection(data.digest)}
+
+    ${summary.unassigned.length > 0 ? unassignedSection(summary.unassigned) : ''}
+    ${summary.excluded.length > 0 ? excludedSection(summary.excluded) : ''}
 
     <p class="muted" style="font-size:12px;margin-top:18px">
       Active time uses a 10-min idle threshold. Concurrent sessions in two terminals double-count.
@@ -93,8 +139,38 @@ function render(root, data, preset, range) {
   });
 
   root.querySelectorAll('[data-action="override"]').forEach(btn => {
-    btn.addEventListener('click', () => openOverridePicker(btn.dataset.project, data.clients));
+    btn.addEventListener('click', () => openOverridePicker(btn.dataset.project, summary.clients));
   });
+
+  // Charts mount last (after innerHTML is final).
+  const velocityEl = document.getElementById('ch-velocity');
+  if (velocityEl && data.velocity.weeks.length > 0) {
+    const PALETTE = ['#4A9EFF', '#7C5CFF', '#3FB68B', '#E8A23B', '#E6536B', '#5BC0DE', '#A18BFB', '#FFB347', '#888'];
+    stackedBarChart(velocityEl, {
+      categories: data.velocity.weeks,
+      series: data.velocity.series.map((s, i) => ({
+        name: s.name,
+        values: s.weeks.map(secs => +(secs / 3600).toFixed(2)),
+        color: s.is_synthetic ? '#5A6573' : PALETTE[i % PALETTE.length],
+      })),
+      formatter: v => `${v.toLocaleString(undefined, {maximumFractionDigits: 1})}h`,
+    });
+  }
+
+  const phasesEl = document.getElementById('ch-phases');
+  if (phasesEl && data.phases.projects.length > 0) {
+    const cats = data.phases.categories; // ['build', 'ops', 'research', 'chat']
+    const colors = { build: '#4A9EFF', ops: '#E8A23B', research: '#3FB68B', chat: '#7C5CFF' };
+    const top = data.phases.projects.slice(0, 14);
+    stackedBarChart(phasesEl, {
+      categories: top.map(p => p.project_name),
+      series: cats.map(cat => ({
+        name: cat,
+        values: top.map(p => p[cat] || 0),
+        color: colors[cat],
+      })),
+    });
+  }
 }
 
 function clientTable(clients, range) {
@@ -178,6 +254,47 @@ function unassignedSection(projects) {
       ${projects.length > 30 ? `<p class="muted" style="font-size:12px;margin-top:8px">…and ${projects.length - 30} more</p>` : ''}
     </div>
   `;
+}
+
+function digestSection(d) {
+  if (!d) return '';
+  const sessions = d.top_sessions || [];
+  const prompts = d.top_prompts || [];
+  if (!sessions.length && !prompts.length) return '';
+  return `
+    <div class="row cols-2" style="margin-top:16px">
+      <div class="card">
+        <h3>Longest sessions</h3>
+        <p class="muted" style="margin:-6px 0 10px;font-size:13px">Where active time piled up in this range.</p>
+        <table>
+          <thead><tr><th>started</th><th>project</th><th class="num">active</th><th class="num">turns</th></tr></thead>
+          <tbody>
+            ${sessions.slice(0, 10).map(s => `
+              <tr>
+                <td class="mono">${fmt.ts(s.started)}</td>
+                <td><a href="#/sessions/${encodeURIComponent(s.session_id)}">${fmt.htmlSafe(s.project_name)}</a></td>
+                <td class="num">${fmt.duration(s.active_seconds)}</td>
+                <td class="num">${fmt.int(s.turns)}</td>
+              </tr>`).join('') || '<tr><td colspan="4" class="muted">no sessions in range</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Heaviest prompts</h3>
+        <p class="muted" style="margin:-6px 0 10px;font-size:13px">Most token-expensive user prompts.</p>
+        <table>
+          <thead><tr><th>when</th><th>prompt</th><th class="num">tokens</th></tr></thead>
+          <tbody>
+            ${prompts.slice(0, 10).map(p => `
+              <tr>
+                <td class="mono" style="white-space:nowrap">${fmt.ts(p.timestamp)}</td>
+                <td class="blur-sensitive" style="max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${fmt.htmlSafe(fmt.short(p.prompt_text || '', 120))}</td>
+                <td class="num">${fmt.compact(p.billable_tokens)}</td>
+              </tr>`).join('') || '<tr><td colspan="3" class="muted">no prompts in range</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
 }
 
 function excludedSection(projects) {

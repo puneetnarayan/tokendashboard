@@ -466,7 +466,12 @@ ACTIVE_GAP_THRESHOLD_S = 600
 
 def _active_seconds_sql(threshold_s: int, range_clause: str) -> str:
     """Capped-gap summation expression. Returns SQL that computes
-    `active_seconds` per group via a LAG window over message timestamps."""
+    `active_seconds` per group via a LAG window over message timestamps.
+
+    The subquery exposes `session_id, project_slug, day, timestamp, gap_s`
+    so callers can group by additional time facets (hour-of-day,
+    day-of-week, ISO week, etc.) without re-running the LAG.
+    """
     return f"""
       WITH ordered AS (
         SELECT session_id, project_slug, timestamp,
@@ -475,7 +480,7 @@ def _active_seconds_sql(threshold_s: int, range_clause: str) -> str:
           FROM messages
          WHERE timestamp IS NOT NULL {range_clause}
       )
-      SELECT session_id, project_slug, day,
+      SELECT session_id, project_slug, day, timestamp,
              CASE
                WHEN prev_ts IS NULL THEN 0.0
                WHEN (julianday(timestamp) - julianday(prev_ts)) * 86400.0 > {threshold_s} THEN 0.0

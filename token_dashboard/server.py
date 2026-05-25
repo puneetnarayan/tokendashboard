@@ -23,6 +23,7 @@ from .db import (
 from .clients import (
     list_clients, get_client, upsert_client, delete_client,
     set_override, clear_override, client_summary, export_client,
+    clients_velocity, hour_of_day, phase_breakdown, activity_digest,
 )
 from .lanes_stats import lanes_stats
 from .pricing import load_pricing, cost_for, get_plan, set_plan
@@ -703,6 +704,36 @@ def build_handler(db_path: str, projects_roots):
                 if cached is not None:
                     return _send_json(self, cached)
                 data = client_summary(db_path, since=since, until=until)
+                _cache_set(cache_key, data)
+                return _send_json(self, data)
+            if path == "/api/clients-velocity":
+                cached = _cache_get(cache_key)
+                if cached is not None:
+                    return _send_json(self, cached)
+                data = clients_velocity(db_path, since=since, until=until)
+                _cache_set(cache_key, data)
+                return _send_json(self, data)
+            if path == "/api/hour-of-day":
+                # LAG-based; cache aggressively. Result is small (7×24).
+                cached = _cache_get(cache_key)
+                if cached is not None:
+                    return _send_json(self, cached)
+                data = hour_of_day(db_path, since=since, until=until)
+                _cache_set(cache_key, data)
+                return _send_json(self, data)
+            if path == "/api/phase-breakdown":
+                cached = _cache_get(cache_key)
+                if cached is not None:
+                    return _send_json(self, cached)
+                data = phase_breakdown(db_path, since=since, until=until)
+                _cache_set(cache_key, data)
+                return _send_json(self, data)
+            if path == "/api/digest":
+                cached = _cache_get(cache_key)
+                if cached is not None:
+                    return _send_json(self, cached)
+                limit = _clamp_limit(qs.get("limit", ["10"])[0], 50)
+                data = activity_digest(db_path, since=since, until=until, limit=limit)
                 _cache_set(cache_key, data)
                 return _send_json(self, data)
             if path == "/api/rtk":
