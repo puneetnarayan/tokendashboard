@@ -20,6 +20,10 @@ from .db import (
     daily_token_breakdown, model_breakdown, skill_breakdown,
     scan_status, search_prompts,
 )
+from .clients import (
+    list_clients, get_client, upsert_client, delete_client,
+    set_override, clear_override, client_summary, export_client,
+)
 from .lanes_stats import lanes_stats
 from .pricing import load_pricing, cost_for, get_plan, set_plan
 from .tips import all_tips, dismiss_tip
@@ -658,6 +662,49 @@ def build_handler(db_path: str, projects_roots):
                 data = lanes_stats(since_iso=since)
                 _cache_set(cache_key, data)
                 return _send_json(self, data)
+            if path == "/api/clients":
+                # List of clients with their patterns (no aggregation).
+                # Aggregated per-range summary lives at /api/clients-summary.
+                return _send_json(self, list_clients(db_path))
+            if path.startswith("/api/clients/") and path.endswith("/export"):
+                # /api/clients/{id}/export?fmt=csv|markdown&since=...&until=...
+                try:
+                    cid = int(path.split("/")[3])
+                except (ValueError, IndexError):
+                    return _send_error(self, 400, "invalid client id")
+                fmt = qs.get("fmt", ["csv"])[0]
+                try:
+                    ctype, body = export_client(
+                        db_path, cid, since=since, until=until, fmt=fmt
+                    )
+                except KeyError:
+                    return _send_error(self, 404, "client not found")
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body.encode("utf-8"))))
+                self.send_header(
+                    "Content-Disposition",
+                    f'attachment; filename="client-{cid}-{fmt}.{ "md" if fmt=="markdown" else "csv" }"',
+                )
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+                return
+            if path.startswith("/api/clients/"):
+                try:
+                    cid = int(path.rsplit("/", 1)[1])
+                except ValueError:
+                    return _send_error(self, 400, "invalid client id")
+                cl = get_client(db_path, cid)
+                if not cl:
+                    return _send_error(self, 404, "client not found")
+                return _send_json(self, cl)
+            if path == "/api/clients-summary":
+                cached = _cache_get(cache_key)
+                if cached is not None:
+                    return _send_json(self, cached)
+                data = client_summary(db_path, since=since, until=until)
+                _cache_set(cache_key, data)
+                return _send_json(self, data)
             if path == "/api/rtk":
                 # Cache the aggregated payload: each call subprocess-shells
                 # the rtk binary once per host. Repeated tab visits or SSE
@@ -738,6 +785,49 @@ def build_handler(db_path: str, projects_roots):
                     threading.Thread(
                         target=_do_refresh, args=(db_path, projects_roots, pricing), daemon=True
                     ).start()
+                    return _send_json(self, {"ok": True})
+                if url.path == "/api/clients":
+                    # Create or update a client. Body shape:
+                    #   { id?: number,                            // omit to create
+                    #     name: string,                           // required
+                    #     hourly_rate?: number, fixed_price?: number,
+                    #     currency?: string, status?: string, notes?: string,
+                    #     patterns?: string[] }
+                    name = (body.get("name") or "").strip()
+                    if not name:
+                        return _send_error(self, 400, "name required")
+                    cid = upsert_client(
+                        db_path,
+                        client_id=body.get("id"),
+                        name=name,
+                        hourly_rate=body.get("hourly_rate"),
+                        fixed_price=body.get("fixed_price"),
+                        currency=(body.get("currency") or "CAD").strip(),
+                        status=(body.get("status") or "active").strip(),
+                        notes=(body.get("notes") or "").strip(),
+                        patterns=body.get("patterns") or [],
+                    )
+                    _cache_clear()
+                    return _send_json(self, {"ok": True, "id": cid})
+                if url.path == "/api/clients/delete":
+                    cid = body.get("id")
+                    if not isinstance(cid, int):
+                        return _send_error(self, 400, "id required")
+                    delete_client(db_path, cid)
+                    _cache_clear()
+                    return _send_json(self, {"ok": True})
+                if url.path == "/api/client-overrides":
+                    # Body: { project_name: string,
+                    #         client_id: number|null,  // null = not billable
+                    #         clear?: bool }            // remove the override row
+                    name = (body.get("project_name") or "").strip()
+                    if not name:
+                        return _send_error(self, 400, "project_name required")
+                    if body.get("clear"):
+                        clear_override(db_path, name)
+                    else:
+                        set_override(db_path, name, body.get("client_id"))
+                    _cache_clear()
                     return _send_json(self, {"ok": True})
                 if url.path == "/api/scan":
                     # POST-only version of /api/scan: run a scan synchronously,

@@ -79,6 +79,17 @@ export function makeSortable(table, { col: defaultCol = 0, dir: defaultDir = 'as
 }
 
 export async function api(path, opts) {
+  // Auto-handle JSON request bodies: if `opts.body` is a plain object,
+  // stringify it and set Content-Type. Lets routes write
+  //   api('/api/x', { method: 'POST', body: { foo: 1 } })
+  // without thinking about headers.
+  if (opts && opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
+    opts = {
+      ...opts,
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      body: JSON.stringify(opts.body),
+    };
+  }
   const r = await fetch(path, opts);
   if (!r.ok) throw new Error(`${path} → ${r.status}`);
   return r.json();
@@ -243,6 +254,7 @@ const ROUTES = {
   '/prompts':  () => import('/web/routes/prompts.js'),
   '/sessions': () => import('/web/routes/sessions.js'),
   '/projects': () => import('/web/routes/projects.js'),
+  '/clients':  () => import('/web/routes/clients.js'),
   '/skills':   () => import('/web/routes/skills.js'),
   '/tips':     () => import('/web/routes/tips.js'),
   '/rtk':      () => import('/web/routes/rtk.js'),
@@ -395,7 +407,7 @@ async function boot() {
     }
     if (_gPending) {
       _gPending = false;
-      const map = { o: '/overview', s: '/sessions', p: '/prompts', r: '/rtk', l: '/lanes', j: '/projects', k: '/skills', t: '/tips' };
+      const map = { o: '/overview', s: '/sessions', p: '/prompts', r: '/rtk', l: '/lanes', j: '/projects', k: '/skills', t: '/tips', c: '/clients' };
       const route = map[e.key.toLowerCase()];
       if (route) { location.hash = '#' + route; e.preventDefault(); }
     }

@@ -165,6 +165,40 @@ CREATE TABLE IF NOT EXISTS slug_meta (
   best_cwd     TEXT,
   host         TEXT
 );
+
+-- Clients: business entities you bill for. A "client" is a freelance
+-- engagement, an internal team, or a stand-in label for personal time —
+-- whichever framing fits. One client owns many `client_patterns`
+-- (substring matchers against the rolled-up project_name); pattern
+-- matching is case-insensitive, longest-match wins. `client_overrides`
+-- lets a specific project escape its pattern (or stay un-billed) without
+-- changing the pattern rules.
+CREATE TABLE IF NOT EXISTS clients (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  name         TEXT NOT NULL UNIQUE,
+  hourly_rate  REAL,
+  fixed_price  REAL,
+  currency     TEXT NOT NULL DEFAULT 'CAD',
+  status       TEXT NOT NULL DEFAULT 'active',
+  notes        TEXT,
+  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS client_patterns (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  pattern   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_client_patterns_client ON client_patterns(client_id);
+
+-- project_name is the rolled-up display name (post _rollup_projects).
+-- NULL client_id means "explicitly not billable" — the project shows
+-- in reports but adds 0 to any client's hours.
+CREATE TABLE IF NOT EXISTS client_overrides (
+  project_name TEXT PRIMARY KEY,
+  client_id    INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+  set_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
 """
 
 
