@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from typing import List, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
 
 from .db import (
@@ -163,26 +164,143 @@ def _empty_rtk_payload(available: bool) -> dict:
     }
 
 
-def _rtk_payload(home=None) -> dict:
-    home_path = Path(home) if home is not None else Path.home()
-    rtk_bin = str(home_path / ".local" / "bin" / "rtk")
-    if not Path(rtk_bin).is_file():
-        return _empty_rtk_payload(False)
-    env = dict(os.environ)
-    env["PATH"] = str(home_path / ".local" / "bin") + ":" + env.get("PATH", "")
+def _rtk_invoke(rtk_bin: str, env: dict) -> Optional[dict]:
+    """Run ``rtk gain --format json --all`` with the given env (PATH + XDG)
+    and return the parsed payload, or None on any failure. Caller decides
+    whether a None means 'host had no rtk' (skip) or 'binary missing' (drop)."""
     try:
         r = subprocess.run(
             [rtk_bin, "gain", "--format", "json", "--all"],
             capture_output=True, text=True, timeout=10, env=env,
         )
         if r.returncode == 0 and r.stdout.strip():
-            data = json.loads(r.stdout)
-            data["available"] = True
-            data["install_url"] = "https://github.com/rtk-ai/rtk"
-            return data
+            return json.loads(r.stdout)
     except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
         pass
-    return _empty_rtk_payload(True)
+    return None
+
+
+def _rtk_merge(payloads: List[Tuple[str, dict]]) -> dict:
+    """Combine N per-host rtk payloads into one. Scalars sum across hosts;
+    daily / weekly / monthly rows merge by their natural key (date /
+    week_start / month). Averaged fields (savings_pct, avg_time_ms) get
+    recomputed from the merged totals so the math is consistent."""
+    summary_keys = (
+        "total_commands", "total_input", "total_output",
+        "total_saved", "total_time_ms",
+    )
+    bucket_keys = {
+        "daily":   ("date",),
+        "weekly":  ("week_start",),
+        "monthly": ("month",),
+    }
+    bucket_sum_keys = (
+        "commands", "input_tokens", "output_tokens",
+        "saved_tokens", "total_time_ms",
+    )
+
+    merged_summary = {k: 0 for k in summary_keys}
+    merged_buckets = {k: {} for k in bucket_keys}
+    contributing_hosts: List[str] = []
+    for host, p in payloads:
+        if not p:
+            continue
+        contributing_hosts.append(host)
+        s = p.get("summary") or {}
+        for k in summary_keys:
+            merged_summary[k] += int(s.get(k) or 0)
+        for bk, (id_field,) in bucket_keys.items():
+            extras = {}
+            if bk == "weekly":
+                extras = {"week_end": True}  # carry along, take max later
+            for row in (p.get(bk) or []):
+                key = row.get(id_field)
+                if not key:
+                    continue
+                existing = merged_buckets[bk].setdefault(key, {id_field: key, **{f: 0 for f in bucket_sum_keys}})
+                for f in bucket_sum_keys:
+                    existing[f] = (existing[f] or 0) + int(row.get(f) or 0)
+                if "week_end" in extras and row.get("week_end"):
+                    prev = existing.get("week_end")
+                    if not prev or row["week_end"] > prev:
+                        existing["week_end"] = row["week_end"]
+
+    def _finalize(row: dict) -> dict:
+        commands = row.get("commands", 0) or 0
+        input_tokens = row.get("input_tokens", 0) or 0
+        saved = row.get("saved_tokens", 0) or 0
+        total_time = row.get("total_time_ms", 0) or 0
+        row["savings_pct"] = (saved / input_tokens * 100) if input_tokens else 0.0
+        row["avg_time_ms"] = round(total_time / commands) if commands else 0
+        return row
+
+    out: dict = {
+        "summary": {
+            **merged_summary,
+            "avg_savings_pct": (
+                merged_summary["total_saved"] / merged_summary["total_input"] * 100
+                if merged_summary["total_input"] else 0.0
+            ),
+            "avg_time_ms": (
+                round(merged_summary["total_time_ms"] / merged_summary["total_commands"])
+                if merged_summary["total_commands"] else 0
+            ),
+        },
+        "daily":   sorted((_finalize(r) for r in merged_buckets["daily"].values()),   key=lambda r: r["date"]),
+        "weekly":  sorted((_finalize(r) for r in merged_buckets["weekly"].values()),  key=lambda r: r["week_start"]),
+        "monthly": sorted((_finalize(r) for r in merged_buckets["monthly"].values()), key=lambda r: r["month"]),
+        "hosts":   contributing_hosts,
+    }
+    return out
+
+
+def _rtk_payload(home=None) -> dict:
+    """Aggregate rtk savings across the local host plus every cached
+    remote host under ~/.cache/token-dashboard/rtk-state/<host>/rtk/.
+    The remote DBs are populated by scripts/sync-remote.sh; pointing
+    XDG_DATA_HOME at the parent dir makes rtk read that host's DB
+    without any per-host binary needed (we use the local rtk binary
+    for everyone)."""
+    home_path = Path(home) if home is not None else Path.home()
+    rtk_bin = str(home_path / ".local" / "bin" / "rtk")
+    if not Path(rtk_bin).is_file():
+        return _empty_rtk_payload(False)
+    base_env = dict(os.environ)
+    base_env["PATH"] = str(home_path / ".local" / "bin") + ":" + base_env.get("PATH", "")
+
+    payloads: List[Tuple[str, dict]] = []
+
+    # Local host first — no XDG override (use whatever the user's real
+    # rtk install reads). We name it 'local' rather than guess the
+    # hostname because rtk has no concept of "which machine" and this
+    # value never surfaces to the UI in a way that needs to match
+    # CLAUDE_PROJECTS_DIRS host labels.
+    local = _rtk_invoke(rtk_bin, base_env)
+    if local:
+        payloads.append(("local", local))
+
+    # Remote hosts: glob cached rtk-state dirs.
+    rtk_cache = home_path / ".cache" / "token-dashboard" / "rtk-state"
+    if rtk_cache.is_dir():
+        for host_dir in sorted(rtk_cache.iterdir()):
+            if not host_dir.is_dir():
+                continue
+            db_path = host_dir / "rtk" / "history.db"
+            if not db_path.is_file():
+                continue
+            env = dict(base_env)
+            env["XDG_DATA_HOME"] = str(host_dir)
+            remote = _rtk_invoke(rtk_bin, env)
+            if remote:
+                payloads.append((host_dir.name, remote))
+
+    if not payloads:
+        return _empty_rtk_payload(True)
+
+    merged = _rtk_merge(payloads)
+    merged["available"] = True
+    merged["install_url"] = "https://github.com/rtk-ai/rtk"
+    return merged
 
 
 def _serve_static(handler, rel: str) -> None:

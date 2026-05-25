@@ -43,22 +43,46 @@ if ! flock -n 9; then
   exit 0
 fi
 
+RTK_CACHE_ROOT="$HOME/.cache/token-dashboard/rtk-state"
+mkdir -p "$RTK_CACHE_ROOT"
+
+# Per host we pull TWO trees:
+#   1. ~/.claude/projects/   → CACHE_ROOT/<host>/projects/   (transcript JSONLs)
+#   2. ~/.local/share/rtk/   → RTK_CACHE_ROOT/<host>/rtk/    (rtk history.db)
+# Both feed the dashboard. The rtk path mirrors XDG_DATA_HOME layout so the
+# server can invoke `XDG_DATA_HOME=$RTK_CACHE_ROOT/<host> rtk gain` and the
+# binary picks up the remote DB without needing a --db flag (rtk has none).
+ssh_opts="-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15"
+
 successes=0
 for host in "${HOSTS[@]}"; do
-  dest="$CACHE_ROOT/$host/projects/"
-  mkdir -p "$dest"
-  # -a archive | -z compress over wire | --delete mirror deletions
-  # --partial keep partial transfers across reconnects
-  # --timeout=30 abort a stalled connection rather than hanging cron
-  # ConnectTimeout=10 fail fast on offline hosts
-  if rsync -az --delete --partial --timeout=30 \
-       -e "ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15" \
-       "$host:.claude/projects/" "$dest" >> "$LOG_FILE" 2>&1; then
-    log "ok: $host -> $dest"
-    successes=$((successes + 1))
+  host_ok=0
+
+  # Transcript projects
+  proj_dest="$CACHE_ROOT/$host/projects/"
+  mkdir -p "$proj_dest"
+  if rsync -az --delete --partial --timeout=30 -e "ssh $ssh_opts" \
+       "$host:.claude/projects/" "$proj_dest" >> "$LOG_FILE" 2>&1; then
+    log "ok: $host projects -> $proj_dest"
+    host_ok=1
   else
-    rc=$?
-    log "fail: $host rsync exit $rc"
+    log "fail: $host projects rsync exit $?"
+  fi
+
+  # RTK history (small file, ~tens of MB — quick)
+  rtk_dest="$RTK_CACHE_ROOT/$host/rtk/"
+  mkdir -p "$rtk_dest"
+  if rsync -az --delete --partial --timeout=30 -e "ssh $ssh_opts" \
+       "$host:.local/share/rtk/" "$rtk_dest" >> "$LOG_FILE" 2>&1; then
+    log "ok: $host rtk -> $rtk_dest"
+    host_ok=1
+  else
+    # rtk may not be installed on every host — log but don't treat as failure
+    log "skip: $host rtk rsync exit $? (rtk maybe not installed)"
+  fi
+
+  if (( host_ok )); then
+    successes=$((successes + 1))
   fi
 done
 

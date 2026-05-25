@@ -47,7 +47,19 @@ export default async function (root) {
   const lastMonth = data.monthly[data.monthly.length - 1];
   const days      = data.daily.slice(-30);
 
+  const hosts = Array.isArray(data.hosts) ? data.hosts : [];
+  const hostStrip = hosts.length
+    ? `<div class="muted" style="font-size:12px;margin-bottom:12px">
+         Aggregated across ${hosts.length} ${hosts.length === 1 ? 'host' : 'hosts'}:
+         ${hosts.map(h => {
+           const label = h === 'local' ? 'jlap (local)' : h;
+           return `<span class="host-pill host-${fmt.htmlSafe(h === 'local' ? 'jlap' : h)}" style="margin-left:6px">${fmt.htmlSafe(label)}</span>`;
+         }).join('')}
+       </div>`
+    : '';
+
   root.innerHTML = `
+    ${hostStrip}
     <div class="row" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
       <div class="card">
         <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">All-Time Saved</div>
