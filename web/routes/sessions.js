@@ -29,11 +29,12 @@ function buildList(root, list, qs) {
     <div class="card">
       <h2>Sessions</h2>
       <table id="sessions-table">
-        <thead><tr><th>started</th><th>project</th><th class="num">turns</th><th class="num">tokens</th><th>session</th></tr></thead>
+        <thead><tr><th>started</th><th>host</th><th>project</th><th class="num">turns</th><th class="num">tokens</th><th>session</th></tr></thead>
         <tbody>
           ${list.map(s => `
             <tr>
               <td class="mono" data-val="${s.started || ''}">${fmt.ts(s.started)}</td>
+              <td data-val="${fmt.htmlSafe(s.host || '')}"><span class="host-pill host-${fmt.htmlSafe(s.host || 'unknown')}">${fmt.htmlSafe(s.host || '—')}</span></td>
               <td data-val="${fmt.htmlSafe(s.project_name || s.project_slug)}" title="${fmt.htmlSafe(s.project_slug)}">${fmt.htmlSafe(s.project_name || s.project_slug)}</td>
               <td class="num" data-val="${s.turns || 0}">${fmt.int(s.turns)}</td>
               <td class="num" data-val="${s.tokens || 0}">${fmt.int(s.tokens)}</td>

@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS messages (
   parent_uuid             TEXT,
   session_id              TEXT NOT NULL,
   project_slug            TEXT NOT NULL,
+  host                    TEXT NOT NULL DEFAULT 'jstation',
   cwd                     TEXT,
   git_branch              TEXT,
   cc_version              TEXT,
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session   ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_project   ON messages(project_slug);
+CREATE INDEX IF NOT EXISTS idx_messages_host      ON messages(host);
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_model     ON messages(model);
 CREATE INDEX IF NOT EXISTS idx_messages_msgid     ON messages(session_id, message_id);
@@ -82,6 +84,14 @@ CREATE TABLE IF NOT EXISTS dismissed_tips (
 CREATE TABLE IF NOT EXISTS summary_meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scan_status (
+  host             TEXT PRIMARY KEY,
+  root_path        TEXT NOT NULL,
+  files_total      INTEGER NOT NULL DEFAULT 0,
+  last_scan_at     TEXT,
+  last_scan_secs   REAL
 );
 
 CREATE TABLE IF NOT EXISTS summary_daily (
@@ -130,6 +140,7 @@ CREATE TABLE IF NOT EXISTS summary_tools (
 CREATE TABLE IF NOT EXISTS summary_sessions (
   session_id              TEXT PRIMARY KEY,
   project_slug            TEXT NOT NULL,
+  host                    TEXT NOT NULL DEFAULT 'jstation',
   sample_cwd              TEXT,
   started                 TEXT NOT NULL,
   ended                   TEXT NOT NULL,
@@ -142,11 +153,49 @@ CREATE TABLE IF NOT EXISTS summary_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_summary_sessions_ended ON summary_sessions(ended);
 CREATE INDEX IF NOT EXISTS idx_summary_sessions_project ON summary_sessions(project_slug);
+CREATE INDEX IF NOT EXISTS idx_summary_sessions_host ON summary_sessions(host);
 """
 
 
 def default_db_path() -> Path:
     return Path.home() / ".claude" / "token-dashboard.db"
+
+
+def scan_status(db_path) -> dict:
+    """Per-host scan progress for the dashboard staleness indicator.
+
+    Each scan_status row carries the host's configured root_path; we count
+    rows in the files table whose path is under that prefix to derive
+    files_ingested. Coupled with files_total (the rglob count from the
+    most recent scan) the UI can render an "X / Y indexed" pill.
+    """
+    with connect(db_path) as c:
+        rows = list(c.execute(
+            "SELECT host, root_path, files_total, last_scan_at, last_scan_secs "
+            "FROM scan_status ORDER BY host"
+        ))
+        hosts = []
+        for r in rows:
+            root = (r["root_path"] or "").rstrip("/")
+            ingested = c.execute(
+                "SELECT COUNT(*) FROM files WHERE path LIKE ?",
+                (root + "/%",),
+            ).fetchone()[0] if root else 0
+            total = r["files_total"] or 0
+            pct = round(100 * ingested / total) if total else 0
+            hosts.append({
+                "host": r["host"],
+                "files_total": total,
+                "files_ingested": ingested,
+                "pct": pct,
+                "last_scan_at": r["last_scan_at"],
+                "last_scan_secs": r["last_scan_secs"],
+            })
+        last_at = max(
+            (h["last_scan_at"] for h in hosts if h["last_scan_at"]),
+            default=None,
+        )
+        return {"hosts": hosts, "last_scan_at": last_at}
 
 
 def init_db(path: Union[str, Path]) -> None:
@@ -155,6 +204,8 @@ def init_db(path: Union[str, Path]) -> None:
     with sqlite3.connect(path) as c:
         c.execute("PRAGMA journal_mode=WAL")
         _migrate_add_message_id(c)
+        _migrate_add_host(c)
+        _migrate_add_host_summary(c)
         c.executescript(SCHEMA)
 
 
@@ -181,12 +232,70 @@ def _migrate_add_message_id(conn) -> None:
     conn.commit()
 
 
+def _migrate_add_host(conn) -> None:
+    """Add messages.host so the dashboard can attribute usage per machine.
+
+    Why: the scanner now reads from multiple roots (JLAP, JPC, Jstation),
+    and the UI needs to break out usage by host. Existing rows pre-migration
+    all came from the local Jstation scan, so backfill them as 'jstation'.
+    How to apply: ALTER if column is missing; preserve existing data (no
+    rescan needed since the host value is a static backfill, not derived
+    from JSONL content).
+    """
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'"
+    ).fetchone()
+    if not has_table:
+        return
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "host" in cols:
+        return
+    conn.execute(
+        "ALTER TABLE messages ADD COLUMN host TEXT NOT NULL DEFAULT 'jstation'"
+    )
+    conn.execute("UPDATE messages SET host='jstation' WHERE host IS NULL OR host=''")
+    conn.commit()
+
+
+def _migrate_add_host_summary(conn) -> None:
+    """Add summary_sessions.host and invalidate the summary cache.
+
+    Why: recent_sessions reads from the warm summary table; without a host
+    column there, the UI can't tag sessions by machine even though messages
+    already carry the attribution.
+    How to apply: ALTER if missing, then clear summary_meta so the next
+    scan triggers a full rebuild — that repopulates summary_sessions with
+    host pulled correctly from messages.host.
+    """
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='summary_sessions'"
+    ).fetchone()
+    if not has_table:
+        return
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(summary_sessions)")}
+    if "host" in cols:
+        return
+    conn.execute(
+        "ALTER TABLE summary_sessions ADD COLUMN host TEXT NOT NULL DEFAULT 'jstation'"
+    )
+    # Force a full summary rebuild on next scan so host gets joined in.
+    conn.execute("DELETE FROM summary_meta WHERE k='last_rebuild'")
+    conn.commit()
+
+
 @contextmanager
 def connect(path: Union[str, Path]):
     conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA cache_size=-65536")  # 64 MB page cache ceiling
+    # synchronous=NORMAL is safe with journal_mode=WAL: writes survive process
+    # crashes, only an OS-level crash mid-fsync risks the last transaction.
+    # FULL (the default) fsyncs on every commit — with BATCH_SIZE=20 and
+    # thousands of files to ingest, that turns a quick walk into hours of
+    # fsync stalls on the spinning /mnt/data disk.
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
     try:
         yield conn
     finally:
@@ -328,12 +437,13 @@ def rebuild_summaries(db_path, days=None, sessions=None) -> None:
 
         c.execute("""
           INSERT INTO summary_sessions (
-            session_id, project_slug, sample_cwd, started, ended, turns,
+            session_id, project_slug, host, sample_cwd, started, ended, turns,
             input_tokens, output_tokens, cache_read_tokens,
             cache_create_5m_tokens, cache_create_1h_tokens
           )
           SELECT session_id,
                  MIN(project_slug),
+                 MIN(host),
                  MIN(cwd),
                  MIN(timestamp),
                  MAX(timestamp),
@@ -560,6 +670,7 @@ def recent_sessions(db_path, limit: int = 20, since=None, until=None) -> list:
     rng, args = _range_clause(since, until)
     sql = f"""
       SELECT session_id, project_slug,
+             MIN(host) AS host,
              MIN(cwd) AS sample_cwd,
              MIN(timestamp) AS started, MAX(timestamp) AS ended,
              SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
@@ -574,7 +685,7 @@ def recent_sessions(db_path, limit: int = 20, since=None, until=None) -> list:
         if _summary_ready(c):
             sess_where, sess_args = _session_range_clause(since, until)
             rows = [dict(r) for r in c.execute(f"""
-              SELECT session_id, project_slug, sample_cwd,
+              SELECT session_id, project_slug, host, sample_cwd,
                      started, ended, turns,
                      input_tokens + output_tokens AS tokens
                 FROM summary_sessions

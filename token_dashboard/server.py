@@ -17,10 +17,11 @@ from .db import (
     overview_totals, expensive_prompts, project_summary,
     tool_token_breakdown, recent_sessions, session_turns,
     daily_token_breakdown, model_breakdown, skill_breakdown,
+    scan_status,
 )
 from .pricing import load_pricing, cost_for, get_plan, set_plan
 from .tips import all_tips, dismiss_tip
-from .scanner import scan_dir
+from .scanner import scan_roots
 from .skills import cached_catalog
 
 
@@ -91,13 +92,13 @@ _WARM_DAYS = [7, 30, 90, None]  # None = all time
 _WARM_DEFAULT_DAYS = 30          # the range the UI lands on first
 
 
-def _do_refresh(db_path: str, projects_dir: str, pricing: dict) -> None:
+def _do_refresh(db_path: str, projects_roots, pricing: dict) -> None:
     """One-shot scan + cache-clear + warm, used by the manual /api/refresh endpoint."""
     if not _SCAN_LOCK.acquire(blocking=False):
         EVENTS.put({"type": "scan-skip", "reason": "already-running", "ts": time.time()})
         return
     try:
-        n = scan_dir(projects_dir, db_path)
+        n = scan_roots(projects_roots, db_path)
         _cache_clear()
         EVENTS.put({"type": "scan", "n": n, "ts": time.time()})
     except Exception as e:
@@ -200,7 +201,7 @@ def _serve_static(handler, rel: str) -> None:
     handler.wfile.write(body)
 
 
-def build_handler(db_path: str, projects_dir: str):
+def build_handler(db_path: str, projects_roots):
     pricing = load_pricing(PRICING_JSON)
 
     class H(http.server.BaseHTTPRequestHandler):
@@ -329,8 +330,24 @@ def build_handler(db_path: str, projects_dir: str):
             if path == "/api/plan":
                 return _send_json(self, {"plan": get_plan(db_path), "pricing": pricing})
             if path == "/api/scan":
-                n = scan_dir(projects_dir, db_path)
+                # Acquire _SCAN_LOCK so this can't race the background _scan_loop
+                # or a concurrent /api/refresh — SQLite chokes ("database is
+                # locked") when two writers collide and aborts the scan mid-walk.
+                if not _SCAN_LOCK.acquire(blocking=False):
+                    return _send_json(self, {"skipped": "already-scanning"})
+                try:
+                    n = scan_roots(projects_roots, db_path)
+                finally:
+                    _SCAN_LOCK.release()
                 return _send_json(self, n)
+            if path == "/api/scan/status":
+                # Lightweight — read scan_status table plus current lock
+                # state so the UI can render a "fresh / stale / scanning"
+                # pill. The :is_scanning flag is what enables the live
+                # progress indicator during a long initial backfill.
+                data = scan_status(db_path)
+                data["is_scanning"] = _SCAN_LOCK.locked()
+                return _send_json(self, data)
             if path == "/api/rtk":
                 return _send_json(self, _rtk_payload())
             if path == "/api/stream":
@@ -377,7 +394,7 @@ def build_handler(db_path: str, projects_dir: str):
                     return _send_json(self, {"ok": True})
                 if url.path == "/api/refresh":
                     threading.Thread(
-                        target=_do_refresh, args=(db_path, projects_dir, pricing), daemon=True
+                        target=_do_refresh, args=(db_path, projects_roots, pricing), daemon=True
                     ).start()
                     return _send_json(self, {"ok": True})
             except Exception as e:
@@ -388,7 +405,7 @@ def build_handler(db_path: str, projects_dir: str):
     return H
 
 
-def _scan_loop(db_path: str, projects_dir: str, pricing: dict, interval: float = 60.0):
+def _scan_loop(db_path: str, projects_roots, pricing: dict, interval: float = 60.0):
     # Sleep first: avoid contending with the synchronous boot warm + the user's
     # first request. The boot warm covers initial cache population.
     time.sleep(interval)
@@ -396,7 +413,7 @@ def _scan_loop(db_path: str, projects_dir: str, pricing: dict, interval: float =
         try:
             if _SCAN_LOCK.acquire(blocking=False):
                 try:
-                    n = scan_dir(projects_dir, db_path)
+                    n = scan_roots(projects_roots, db_path)
                     if n["messages"] > 0:
                         _cache_clear()
                         EVENTS.put({"type": "scan", "n": n, "ts": time.time()})
@@ -407,7 +424,7 @@ def _scan_loop(db_path: str, projects_dir: str, pricing: dict, interval: float =
         time.sleep(interval)
 
 
-def run(host: str, port: int, db_path: str, projects_dir: str):
+def run(host: str, port: int, db_path: str, projects_roots):
     pricing = load_pricing(PRICING_JSON)
     # Warm the default range (30d) synchronously before opening the port so
     # the user's first paint is a cache hit. Then warm 7d/90d/all in the
@@ -418,7 +435,7 @@ def run(host: str, port: int, db_path: str, projects_dir: str):
             if days != _WARM_DEFAULT_DAYS:
                 _warm_one(db_path, pricing, days)
     threading.Thread(target=_warm_rest, daemon=True).start()
-    threading.Thread(target=_scan_loop, args=(db_path, projects_dir, pricing), daemon=True).start()
-    H = build_handler(db_path, projects_dir)
+    threading.Thread(target=_scan_loop, args=(db_path, projects_roots, pricing), daemon=True).start()
+    H = build_handler(db_path, projects_roots)
     httpd = http.server.ThreadingHTTPServer((host, port), H)
     httpd.serve_forever()

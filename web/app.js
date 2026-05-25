@@ -92,6 +92,83 @@ let _nextScanAt  = Date.now() + SCAN_INTERVAL;
 let _scanning    = false;
 let _hasNewData  = false;
 
+// ── Scan-status pill ──────────────────────────────────────────────────────────
+// Live snapshot of how many JSONLs on disk have been ingested per host.
+// During the initial backfill of a new host (~thousands of files), this
+// is the signal that the dashboard's totals are still climbing — without
+// it, the user sees an apparently-complete UI that's actually stale.
+function fmtAgo(iso) {
+  if (!iso) return 'never';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return 'just now';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+async function updateScanStatus() {
+  const pill = document.getElementById('scan-status-pill');
+  if (!pill) return;
+  let data;
+  try { data = await api('/api/scan/status'); }
+  catch { pill.textContent = 'scan ?'; pill.className = 'pill scan-pill muted'; return; }
+  const hosts = data.hosts || [];
+  // A host is "indexing" when its on-disk count is known but partially
+  // ingested. files_total=0 means we haven't measured yet (this host's
+  // first walk is still in flight) — show absolute file count instead.
+  const measured = hosts.filter(h => h.files_total > 0);
+  const indexing = measured.filter(h => h.pct < 100);
+  const tooltipLines = hosts.length === 0
+    ? ['No scan recorded yet']
+    : hosts.map(h => {
+        const stamp = h.last_scan_at ? ` · last scan ${fmtAgo(h.last_scan_at)}` : '';
+        if (h.files_total > 0) {
+          return `${h.host}: ${h.files_ingested.toLocaleString()} / ${h.files_total.toLocaleString()} files (${h.pct}%)${stamp}`;
+        }
+        return `${h.host}: ${h.files_ingested.toLocaleString()} files ingested · walking now${stamp}`;
+      });
+  if (data.is_scanning) {
+    tooltipLines.push('Scanning now…');
+  }
+  pill.title = tooltipLines.join('\n');
+  if (data.is_scanning) {
+    pill.className = 'pill scan-pill scanning';
+    if (indexing.length) {
+      const h = indexing[0];
+      pill.textContent = `Indexing ${h.host} ${h.pct}%`;
+    } else {
+      // Either first-ever walk (no measured hosts) or all measured are
+      // at 100% but a re-walk is in progress — show file count if we
+      // know any in-flight numbers.
+      const unmeasured = hosts.find(h => h.files_total === 0 && h.files_ingested > 0);
+      if (unmeasured) {
+        pill.textContent = `Indexing ${unmeasured.host} (${unmeasured.files_ingested.toLocaleString()} files)`;
+      } else {
+        pill.textContent = 'Scanning…';
+      }
+    }
+    return;
+  }
+  if (indexing.length) {
+    pill.className = 'pill scan-pill stale';
+    const h = indexing[0];
+    pill.textContent = `${h.host} ${h.pct}% · stale`;
+    return;
+  }
+  // All hosts at 100% (or no hosts known yet).
+  if (measured.length === 0) {
+    pill.className = 'pill scan-pill muted';
+    pill.textContent = 'scan idle';
+    return;
+  }
+  pill.className = 'pill scan-pill fresh';
+  pill.textContent = `✓ fresh · ${fmtAgo(data.last_scan_at)}`;
+}
+
 function updateRefreshBtn() {
   const btn = document.getElementById('refresh-btn');
   if (!btn) return;
@@ -143,6 +220,7 @@ function buildTopbar() {
       ${Object.keys(ROUTES).map(p => `<a href="#${p}" data-route="${p}">${p.slice(1)}</a>`).join('')}
     </nav>
     <div class="spacer"></div>
+    <span class="pill scan-pill" id="scan-status-pill" title="Loading…">scan</span>
     <span class="pill" id="plan-pill">api</span>
     <span class="pill muted" title="Cmd/Ctrl+B blurs sensitive text">⌘B blur</span>
     <button id="refresh-btn" class="refresh-btn" title="Manually refresh data">↻ 60s</button>
@@ -256,6 +334,12 @@ async function boot() {
     if (!_scanning && !_hasNewData && secs === 0) setScanning(true);
   }, 1000);
 
+  // Scan-status pill: initial fetch + poll every 5s. Pollling is cheap
+  // (~3ms server-side) and lets the pill update during a long backfill
+  // even between SSE 'scan' events.
+  updateScanStatus();
+  setInterval(updateScanStatus, 5_000);
+
   // SSE diff stream.
   // On scan: invalidate caches and show "new data" badge — do NOT auto-render.
   // Re-rendering charts on every background scan caused ECharts instance
@@ -270,6 +354,7 @@ async function boot() {
           _nextScanAt = Date.now() + SCAN_INTERVAL;
           _hasNewData = true;
           setScanning(false); // clears spinner; updateRefreshBtn() shows "new data"
+          updateScanStatus(); // refresh pill immediately after a scan
         }
       } catch {}
     };

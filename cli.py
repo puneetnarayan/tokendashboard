@@ -6,9 +6,10 @@ import os
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import List, Tuple
 
 from token_dashboard.db import init_db, default_db_path, overview_totals
-from token_dashboard.scanner import scan_dir
+from token_dashboard.scanner import scan_roots
 from token_dashboard.tips import all_tips
 
 
@@ -16,12 +17,47 @@ def _db_path(args) -> str:
     return args.db or os.environ.get("TOKEN_DASHBOARD_DB") or str(default_db_path())
 
 
-def _projects(args) -> str:
-    return (
-        args.projects_dir
-        or os.environ.get("CLAUDE_PROJECTS_DIR")
-        or str(Path.home() / ".claude" / "projects")
-    )
+def _parse_projects_dirs(spec: str) -> List[Tuple[str, str]]:
+    """Parse CLAUDE_PROJECTS_DIRS into [(host, path), ...].
+
+    Format: ``host1=/path/one:host2=/path/two``. Colon-separated pairs;
+    each pair is ``host=path``. A bare path (no `=`) is treated as
+    ``jstation=<path>`` so a misconfigured deployment never silently
+    drops data into the wrong host attribution.
+    """
+    out: List[Tuple[str, str]] = []
+    for entry in spec.split(":"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "=" in entry:
+            host, _, path = entry.partition("=")
+            host, path = host.strip(), path.strip()
+        else:
+            host, path = "jstation", entry
+        if host and path:
+            out.append((host, path))
+    return out
+
+
+def _projects_roots(args) -> List[Tuple[str, str]]:
+    """Resolve scan roots into a list of (host, path) tuples.
+
+    Priority: --projects-dir CLI flag (single root, host='jstation') >
+    CLAUDE_PROJECTS_DIRS env (multi-root) > CLAUDE_PROJECTS_DIR env
+    (single root, host='jstation') > default ~/.claude/projects.
+    """
+    if args.projects_dir:
+        return [("jstation", args.projects_dir)]
+    multi = os.environ.get("CLAUDE_PROJECTS_DIRS")
+    if multi:
+        roots = _parse_projects_dirs(multi)
+        if roots:
+            return roots
+    single = os.environ.get("CLAUDE_PROJECTS_DIR")
+    if single:
+        return [("jstation", single)]
+    return [("jstation", str(Path.home() / ".claude" / "projects"))]
 
 
 def _today_range():
@@ -34,8 +70,13 @@ def _today_range():
 def cmd_scan(args):
     db = _db_path(args)
     init_db(db)
-    n = scan_dir(_projects(args), db)
-    print(f"Token Dashboard: scanned {n['files']} files, {n['messages']} messages, {n['tools']} tool calls")
+    roots = _projects_roots(args)
+    n = scan_roots(roots, db)
+    host_summary = ",".join(h for h, _ in roots)
+    print(
+        f"Token Dashboard: scanned {n['files']} files, {n['messages']} messages, "
+        f"{n['tools']} tool calls (hosts: {host_summary})"
+    )
 
 
 def cmd_today(args):
@@ -73,8 +114,9 @@ def cmd_tips(args):
 def cmd_dashboard(args):
     db = _db_path(args)
     init_db(db)
+    roots = _projects_roots(args)
     if not args.no_scan:
-        scan_dir(_projects(args), db)
+        scan_roots(roots, db)
     from token_dashboard.server import run
 
     host = os.environ.get("HOST", "127.0.0.1")
@@ -82,8 +124,8 @@ def cmd_dashboard(args):
     url = f"http://{host}:{port}/"
     if not args.no_open:
         webbrowser.open(url)
-    print(f"Token Dashboard listening on {url}")
-    run(host, port, db, _projects(args))
+    print(f"Token Dashboard listening on {url} (hosts: {','.join(h for h, _ in roots)})")
+    run(host, port, db, roots)
 
 
 def main():

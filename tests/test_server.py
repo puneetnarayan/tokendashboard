@@ -32,7 +32,7 @@ class ServerTests(unittest.TestCase):
             c.execute("INSERT INTO messages (uuid, parent_uuid, session_id, project_slug, type, timestamp, model, input_tokens, output_tokens, cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens) VALUES ('a','u','s','p','assistant','2026-04-19T00:00:01Z','claude-haiku-4-5',1,1,0,0,0)")
             c.commit()
         self.port = _free_port()
-        H = build_handler(self.db, projects_dir="/nonexistent")
+        H = build_handler(self.db, projects_roots=[("jstation", "/nonexistent")])
         self.httpd = http.server.HTTPServer(("127.0.0.1", self.port), H)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
@@ -89,35 +89,35 @@ class RefreshTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.db = os.path.join(self.tmp, "refresh.db")
         init_db(self.db)
-        self.orig_scan_dir = server.scan_dir
+        self.orig_scan_roots = server.scan_roots
         self.orig_warm_bundle = server._warm_bundle
 
     def tearDown(self):
-        server.scan_dir = self.orig_scan_dir
+        server.scan_roots = self.orig_scan_roots
         server._warm_bundle = self.orig_warm_bundle
 
     def test_refresh_does_not_eagerly_warm_overview_bundles(self):
         calls = {"warm": 0}
-        server.scan_dir = lambda projects_dir, db_path: {"messages": 0, "tools": 0, "files": 0}
+        server.scan_roots = lambda roots, db_path: {"messages": 0, "tools": 0, "files": 0}
         server._warm_bundle = lambda db_path, pricing: calls.__setitem__("warm", calls["warm"] + 1)
 
-        server._do_refresh(self.db, "/nonexistent", {"models": {}, "plans": {}})
+        server._do_refresh(self.db, [("jstation", "/nonexistent")], {"models": {}, "plans": {}})
 
         self.assertEqual(calls["warm"], 0)
 
     def test_overlapping_refreshes_are_coalesced(self):
         calls = {"scan": 0}
 
-        def slow_scan(projects_dir, db_path):
+        def slow_scan(roots, db_path):
             calls["scan"] += 1
             time.sleep(0.05)
             return {"messages": 0, "tools": 0, "files": 0}
 
-        server.scan_dir = slow_scan
+        server.scan_roots = slow_scan
         server._warm_bundle = lambda db_path, pricing: None
 
-        t1 = threading.Thread(target=server._do_refresh, args=(self.db, "/nonexistent", {"models": {}, "plans": {}}))
-        t2 = threading.Thread(target=server._do_refresh, args=(self.db, "/nonexistent", {"models": {}, "plans": {}}))
+        t1 = threading.Thread(target=server._do_refresh, args=(self.db, [("jstation", "/nonexistent")], {"models": {}, "plans": {}}))
+        t2 = threading.Thread(target=server._do_refresh, args=(self.db, [("jstation", "/nonexistent")], {"models": {}, "plans": {}}))
         t1.start()
         t2.start()
         t1.join()
