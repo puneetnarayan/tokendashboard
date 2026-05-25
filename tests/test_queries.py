@@ -151,6 +151,44 @@ class SummaryQueryTests(unittest.TestCase):
         self.assertEqual(sessions[0]["session_id"], "s2")
         self.assertEqual(sessions[0]["tokens"], 11)
 
+    def test_active_seconds_populated_in_summary_path(self):
+        # After rebuild_summaries(full), summary_daily.active_seconds and
+        # summary_sessions.active_seconds must be set so query functions
+        # avoid the LAG-over-messages slow path. Insert gap-bearing
+        # messages, rebuild, then verify both columns and that the
+        # public API returns the same value as the cold-path computation.
+        with connect(self.db) as c:
+            c.execute("""
+              INSERT INTO messages
+                (uuid, session_id, project_slug, cwd, type, timestamp,
+                 input_tokens, output_tokens, cache_read_tokens,
+                 cache_create_5m_tokens, cache_create_1h_tokens)
+              VALUES
+                ('ta1','sActive','projA','/work/projA','user',
+                 '2026-04-15T12:00:00Z',0,0,0,0,0),
+                ('ta2','sActive','projA','/work/projA','assistant',
+                 '2026-04-15T12:02:00Z',1,1,0,0,0),
+                ('ta3','sActive','projA','/work/projA','user',
+                 '2026-04-15T12:05:00Z',0,0,0,0,0)
+            """)
+            c.commit()
+        rebuild_summaries(self.db)
+        with connect(self.db) as c:
+            daily = c.execute(
+                "SELECT day, active_seconds FROM summary_daily WHERE day='2026-04-15'"
+            ).fetchone()
+            self.assertIsNotNone(daily)
+            self.assertAlmostEqual(daily["active_seconds"], 300, delta=1.0)
+            sess = c.execute(
+                "SELECT session_id, active_seconds FROM summary_sessions WHERE session_id='sActive'"
+            ).fetchone()
+            self.assertAlmostEqual(sess["active_seconds"], 300, delta=1.0)
+
+        # Public API agrees (now reads from summary tables, no LAG at query time).
+        secs = total_active_seconds(self.db, since="2026-04-15T00:00:00Z",
+                                    until="2026-04-16T00:00:00Z")
+        self.assertAlmostEqual(secs, 300, delta=1.0)
+
     def test_summary_queries_respect_date_ranges(self):
         rebuild_summaries(self.db)
         with connect(self.db) as c:

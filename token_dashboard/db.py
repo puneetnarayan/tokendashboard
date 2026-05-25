@@ -101,7 +101,8 @@ CREATE TABLE IF NOT EXISTS summary_daily (
   output_tokens          INTEGER NOT NULL DEFAULT 0,
   cache_read_tokens      INTEGER NOT NULL DEFAULT 0,
   cache_create_5m_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_create_1h_tokens INTEGER NOT NULL DEFAULT 0
+  cache_create_1h_tokens INTEGER NOT NULL DEFAULT 0,
+  active_seconds         REAL    NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS summary_projects (
@@ -149,11 +150,21 @@ CREATE TABLE IF NOT EXISTS summary_sessions (
   output_tokens           INTEGER NOT NULL DEFAULT 0,
   cache_read_tokens       INTEGER NOT NULL DEFAULT 0,
   cache_create_5m_tokens  INTEGER NOT NULL DEFAULT 0,
-  cache_create_1h_tokens  INTEGER NOT NULL DEFAULT 0
+  cache_create_1h_tokens  INTEGER NOT NULL DEFAULT 0,
+  active_seconds          REAL    NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_summary_sessions_ended ON summary_sessions(ended);
 CREATE INDEX IF NOT EXISTS idx_summary_sessions_project ON summary_sessions(project_slug);
 CREATE INDEX IF NOT EXISTS idx_summary_sessions_host ON summary_sessions(host);
+CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp ON messages(session_id, timestamp);
+
+-- Per-slug metadata cache. Populated during rebuild_summaries; lets the
+-- project-rollup code skip a full messages scan on every overview call.
+CREATE TABLE IF NOT EXISTS slug_meta (
+  project_slug TEXT PRIMARY KEY,
+  best_cwd     TEXT,
+  host         TEXT
+);
 """
 
 
@@ -244,6 +255,7 @@ def init_db(path: Union[str, Path]) -> None:
         _migrate_add_message_id(c)
         _migrate_add_host(c)
         _migrate_add_host_summary(c)
+        _migrate_add_active_seconds(c)
         c.executescript(SCHEMA)
         _migrate_add_fts(c)
 
@@ -341,6 +353,30 @@ def _migrate_add_fts(conn) -> None:
     conn.commit()
 
 
+def _migrate_add_active_seconds(conn) -> None:
+    """Add active_seconds to summary_daily + summary_sessions.
+
+    Why: previously /api/overview-bundle ran the LAG-based query 3×
+    (curr range, prev range, per-slug rollup) on raw messages — ~2.6s
+    per call on a 1M-row DB. Precomputing it during rebuild_summaries
+    drops the query to a column read.
+    How to apply: ALTER if missing, then clear summary_meta so the next
+    scan triggers a full rebuild — that populates the column.
+    """
+    for table in ("summary_daily", "summary_sessions"):
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        if not has_table:
+            continue
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "active_seconds" in cols:
+            continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN active_seconds REAL NOT NULL DEFAULT 0")
+        conn.execute("DELETE FROM summary_meta WHERE k='last_rebuild'")
+    conn.commit()
+
+
 def _migrate_add_host_summary(conn) -> None:
     """Add summary_sessions.host and invalidate the summary cache.
 
@@ -417,7 +453,19 @@ def _active_seconds_sql(threshold_s: int, range_clause: str) -> str:
 
 def _active_seconds_per_slug(conn, since=None, until=None,
                              threshold_s: int = ACTIVE_GAP_THRESHOLD_S) -> dict:
-    """Map project_slug → active_seconds. Used by project_summary rollup."""
+    """Map project_slug → active_seconds. Used by project_summary rollup.
+
+    Fast path: summary_sessions.active_seconds (column read, ~5ms).
+    Cold path: raw LAG over messages (~2.6s on 1M rows). Cold path only
+    runs when the DB hasn't been summary-rebuilt yet.
+    """
+    if _summary_ready(conn):
+        sess_where, sess_args = _session_range_clause(since, until)
+        sql = (
+            "SELECT project_slug, COALESCE(SUM(active_seconds), 0) "
+            "FROM summary_sessions" + sess_where + " GROUP BY project_slug"
+        )
+        return {row[0]: row[1] for row in conn.execute(sql, sess_args)}
     rng, args = _range_clause(since, until)
     sql = f"SELECT project_slug, COALESCE(SUM(gap_s), 0) FROM ({_active_seconds_sql(threshold_s, rng)}) GROUP BY project_slug"
     return {row[0]: row[1] for row in conn.execute(sql, args)}
@@ -433,19 +481,29 @@ def total_active_seconds(db_path, since=None, until=None,
     UI tooltip; do not silently dedup, since we can't know which session
     actually had your attention.
     """
-    rng, args = _range_clause(since, until)
-    sql = f"SELECT COALESCE(SUM(gap_s), 0) FROM ({_active_seconds_sql(threshold_s, rng)})"
     with connect(db_path) as c:
-        row = c.execute(sql, args).fetchone()
-        return float(row[0] or 0.0)
+        if _summary_ready(c):
+            day_rng, day_args = _date_range_clause(since, until, col="day")
+            row = c.execute(
+                f"SELECT COALESCE(SUM(active_seconds), 0) FROM summary_daily WHERE 1=1 {day_rng}",
+                day_args,
+            ).fetchone()
+            return float(row[0] or 0.0)
+        rng, args = _range_clause(since, until)
+        sql = f"SELECT COALESCE(SUM(gap_s), 0) FROM ({_active_seconds_sql(threshold_s, rng)})"
+        return float(c.execute(sql, args).fetchone()[0] or 0.0)
 
 
 def daily_active_seconds(db_path, since=None, until=None,
                          threshold_s: int = ACTIVE_GAP_THRESHOLD_S) -> dict:
     """Map YYYY-MM-DD → active_seconds. Powers the heatmap's hours toggle."""
-    rng, args = _range_clause(since, until)
-    sql = f"SELECT day, COALESCE(SUM(gap_s), 0) FROM ({_active_seconds_sql(threshold_s, rng)}) GROUP BY day"
     with connect(db_path) as c:
+        if _summary_ready(c):
+            day_rng, day_args = _date_range_clause(since, until, col="day")
+            sql = f"SELECT day, COALESCE(active_seconds, 0) FROM summary_daily WHERE 1=1 {day_rng}"
+            return {row[0]: row[1] for row in c.execute(sql, day_args)}
+        rng, args = _range_clause(since, until)
+        sql = f"SELECT day, COALESCE(SUM(gap_s), 0) FROM ({_active_seconds_sql(threshold_s, rng)}) GROUP BY day"
         return {row[0]: row[1] for row in c.execute(sql, args)}
 
 
@@ -513,23 +571,62 @@ def rebuild_summaries(db_path, days=None, sessions=None) -> None:
             if session_args:
                 c.execute(f"DELETE FROM summary_sessions WHERE session_id IN ({session_ph})", session_args)
 
+        # Precompute per-day active_seconds in a temp table so the main
+        # summary_daily INSERT can LEFT JOIN it in one shot. The LAG runs
+        # over UNFILTERED messages — we need preceding-message context
+        # even when the day_filter is applied (otherwise gaps that span
+        # midnight get dropped). The day_filter is applied after the gap
+        # math via the WHERE on the outer SELECT.
+        c.execute("DROP TABLE IF EXISTS _daily_active")
+        c.execute(f"""
+          CREATE TEMP TABLE _daily_active AS
+          WITH ordered AS (
+            SELECT timestamp,
+                   substr(timestamp, 1, 10) AS day,
+                   LAG(timestamp) OVER (PARTITION BY session_id ORDER BY timestamp) AS prev_ts
+              FROM messages
+             WHERE timestamp IS NOT NULL
+          )
+          SELECT day,
+                 SUM(CASE
+                       WHEN prev_ts IS NULL THEN 0
+                       WHEN (julianday(timestamp) - julianday(prev_ts)) * 86400.0 > {ACTIVE_GAP_THRESHOLD_S} THEN 0
+                       ELSE (julianday(timestamp) - julianday(prev_ts)) * 86400.0
+                     END) AS active_secs
+            FROM ordered
+           WHERE 1=1 {('AND day IN (' + ','.join('?' * len(day_args)) + ')') if day_args else ''}
+           GROUP BY day
+        """, day_args)
+
         c.execute("""
           INSERT INTO summary_daily (
             day, turns, input_tokens, output_tokens, cache_read_tokens,
-            cache_create_5m_tokens, cache_create_1h_tokens
+            cache_create_5m_tokens, cache_create_1h_tokens, active_seconds
           )
-          SELECT substr(timestamp, 1, 10) AS day,
-                 SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
-                 COALESCE(SUM(input_tokens),0),
-                 COALESCE(SUM(output_tokens),0),
-                 COALESCE(SUM(cache_read_tokens),0),
-                 COALESCE(SUM(cache_create_5m_tokens),0),
-                 COALESCE(SUM(cache_create_1h_tokens),0)
-            FROM messages
-           WHERE timestamp IS NOT NULL
+          SELECT s.day,
+                 s.turns,
+                 s.input_tokens,
+                 s.output_tokens,
+                 s.cache_read_tokens,
+                 s.cache_create_5m_tokens,
+                 s.cache_create_1h_tokens,
+                 COALESCE(a.active_secs, 0)
+            FROM (
+              SELECT substr(timestamp, 1, 10) AS day,
+                     SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
+                     COALESCE(SUM(input_tokens),0)            AS input_tokens,
+                     COALESCE(SUM(output_tokens),0)           AS output_tokens,
+                     COALESCE(SUM(cache_read_tokens),0)       AS cache_read_tokens,
+                     COALESCE(SUM(cache_create_5m_tokens),0)  AS cache_create_5m_tokens,
+                     COALESCE(SUM(cache_create_1h_tokens),0)  AS cache_create_1h_tokens
+                FROM messages
+               WHERE timestamp IS NOT NULL
         """ + day_filter + """
-           GROUP BY day
+               GROUP BY day
+            ) s
+            LEFT JOIN _daily_active a ON a.day = s.day
         """, day_args)
+        c.execute("DROP TABLE _daily_active")
 
         c.execute("""
           INSERT INTO summary_projects (
@@ -582,29 +679,92 @@ def rebuild_summaries(db_path, days=None, sessions=None) -> None:
            GROUP BY day, tool_name
         """, day_args)
 
+        # Precompute per-session active_seconds. Session filter is applied
+        # inside the temp table because each session's gaps are
+        # self-contained (LAG partitions by session_id).
+        c.execute("DROP TABLE IF EXISTS _session_active")
+        c.execute(f"""
+          CREATE TEMP TABLE _session_active AS
+          WITH ordered AS (
+            SELECT session_id, timestamp,
+                   LAG(timestamp) OVER (PARTITION BY session_id ORDER BY timestamp) AS prev_ts
+              FROM messages
+             WHERE timestamp IS NOT NULL {session_filter}
+          )
+          SELECT session_id,
+                 SUM(CASE
+                       WHEN prev_ts IS NULL THEN 0
+                       WHEN (julianday(timestamp) - julianday(prev_ts)) * 86400.0 > {ACTIVE_GAP_THRESHOLD_S} THEN 0
+                       ELSE (julianday(timestamp) - julianday(prev_ts)) * 86400.0
+                     END) AS active_secs
+            FROM ordered
+           GROUP BY session_id
+        """, session_args)
+
         c.execute("""
           INSERT INTO summary_sessions (
             session_id, project_slug, host, sample_cwd, started, ended, turns,
             input_tokens, output_tokens, cache_read_tokens,
-            cache_create_5m_tokens, cache_create_1h_tokens
+            cache_create_5m_tokens, cache_create_1h_tokens, active_seconds
           )
-          SELECT session_id,
-                 MIN(project_slug),
-                 MIN(host),
-                 MIN(cwd),
-                 MIN(timestamp),
-                 MAX(timestamp),
-                 SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
-                 COALESCE(SUM(input_tokens),0),
-                 COALESCE(SUM(output_tokens),0),
-                 COALESCE(SUM(cache_read_tokens),0),
-                 COALESCE(SUM(cache_create_5m_tokens),0),
-                 COALESCE(SUM(cache_create_1h_tokens),0)
-            FROM messages
+          SELECT m.session_id,
+                 MIN(m.project_slug),
+                 MIN(m.host),
+                 MIN(m.cwd),
+                 MIN(m.timestamp),
+                 MAX(m.timestamp),
+                 SUM(CASE WHEN m.type='user' THEN 1 ELSE 0 END) AS turns,
+                 COALESCE(SUM(m.input_tokens),0),
+                 COALESCE(SUM(m.output_tokens),0),
+                 COALESCE(SUM(m.cache_read_tokens),0),
+                 COALESCE(SUM(m.cache_create_5m_tokens),0),
+                 COALESCE(SUM(m.cache_create_1h_tokens),0),
+                 COALESCE(a.active_secs, 0)
+            FROM messages m
+            LEFT JOIN _session_active a ON a.session_id = m.session_id
            WHERE 1=1
-        """ + session_filter + """
-           GROUP BY session_id
+        """ + session_filter.replace("session_id", "m.session_id") + """
+           GROUP BY m.session_id
         """, session_args)
+        c.execute("DROP TABLE _session_active")
+
+        # Per-slug metadata cache (best_cwd + host). Recomputed in full on
+        # every rebuild — the maps are tiny (~80 slugs × 2 strings each),
+        # but each scan of `messages` to compute them costs ~2.6s, so
+        # caching here is the difference between a 3s overview load and
+        # a 2ms one. Scoped to slugs in the current rebuild filter so we
+        # don't blow away unrelated slugs during incremental rebuilds.
+        if full:
+            c.execute("DELETE FROM slug_meta")
+            scoped_slugs = [r[0] for r in c.execute("SELECT DISTINCT project_slug FROM messages")]
+        else:
+            # Find slugs touched by this incremental scope.
+            scoped_slugs = []
+            if session_args:
+                scoped_slugs.extend(
+                    r[0] for r in c.execute(
+                        f"SELECT DISTINCT project_slug FROM messages WHERE session_id IN ({','.join('?' * len(session_args))})",
+                        session_args,
+                    )
+                )
+            if day_args:
+                scoped_slugs.extend(
+                    r[0] for r in c.execute(
+                        f"SELECT DISTINCT project_slug FROM messages WHERE substr(timestamp, 1, 10) IN ({','.join('?' * len(day_args))})",
+                        day_args,
+                    )
+                )
+            scoped_slugs = sorted(set(scoped_slugs))
+            if scoped_slugs:
+                ph = ",".join("?" * len(scoped_slugs))
+                c.execute(f"DELETE FROM slug_meta WHERE project_slug IN ({ph})", scoped_slugs)
+        if scoped_slugs:
+            best = _best_cwd_per_slug(c, scoped_slugs)
+            hosts = _host_per_slug(c, scoped_slugs)
+            c.executemany(
+                "INSERT INTO slug_meta (project_slug, best_cwd, host) VALUES (?, ?, ?)",
+                [(s, best.get(s), hosts.get(s)) for s in scoped_slugs],
+            )
 
         c.execute(
             "INSERT OR REPLACE INTO summary_meta (k, v) VALUES ('last_rebuild', strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
@@ -851,6 +1011,25 @@ def _host_per_slug(conn, slugs) -> dict:
     return {slug: max(lst, key=lambda x: x[1])[0] for slug, lst in by_slug.items()}
 
 
+def _slug_meta(conn) -> tuple:
+    """Return (best_cwd_per_slug, host_per_slug) maps.
+
+    Fast path: read from slug_meta table (populated by rebuild_summaries).
+    Cold path: scan messages (~2.6s on 1M rows; only fires on a fresh DB
+    that hasn't been summary-rebuilt yet).
+    """
+    try:
+        rows = list(conn.execute("SELECT project_slug, best_cwd, host FROM slug_meta"))
+    except sqlite3.OperationalError:
+        rows = []
+    if rows:
+        best = {r[0]: r[1] for r in rows}
+        hosts = {r[0]: r[2] for r in rows}
+        return best, hosts
+    slugs = [r[0] for r in conn.execute("SELECT DISTINCT project_slug FROM messages")]
+    return _best_cwd_per_slug(conn, slugs), _host_per_slug(conn, slugs)
+
+
 def _rollup_projects(conn, rows, active_secs_map=None) -> list:
     """Roll sub-path slugs into their parent, then merge cross-host duplicates.
 
@@ -864,8 +1043,10 @@ def _rollup_projects(conn, rows, active_secs_map=None) -> list:
     """
     rows = [dict(r) for r in rows]
     slugs = sorted({r["project_slug"] for r in rows})
-    best_cwd = _best_cwd_per_slug(conn, slugs)
-    host_of = _host_per_slug(conn, slugs)
+    best_cwd, host_of = _slug_meta(conn)
+    # Cold-path returns maps over ALL slugs; in the warm path we only
+    # need entries for slugs present in this result. The maps are tiny
+    # so we accept the extra entries rather than filtering.
 
     eligible_parents = {
         slug for slug in slugs
@@ -1082,25 +1263,23 @@ def daily_token_breakdown(db_path, since=None, until=None) -> list:
        ORDER BY day ASC
     """
     with connect(db_path) as c:
-        # Active seconds always reads from raw messages (the LAG window
-        # needs per-message timestamps that the daily summary doesn't
-        # carry). Join into both query paths so the heatmap toggle
-        # stays consistent regardless of summary state.
-        active_by_day = daily_active_seconds(db_path, since=since, until=until)
         if _summary_ready(c):
+            # Fast path — active_seconds is already a column on summary_daily.
             day_rng, day_args = _date_range_clause(since, until, col="day")
-            rows = [dict(r) for r in c.execute(f"""
+            return [dict(r) for r in c.execute(f"""
               SELECT day,
                      input_tokens,
                      output_tokens,
                      cache_read_tokens,
-                     cache_create_5m_tokens + cache_create_1h_tokens AS cache_create_tokens
+                     cache_create_5m_tokens + cache_create_1h_tokens AS cache_create_tokens,
+                     active_seconds
                 FROM summary_daily
                WHERE 1=1 {day_rng}
                ORDER BY day ASC
             """, day_args)]
-        else:
-            rows = [dict(r) for r in c.execute(sql, args)]
+        # Cold path — DB hasn't been summary-rebuilt yet. LAG once per day.
+        rows = [dict(r) for r in c.execute(sql, args)]
+        active_by_day = daily_active_seconds(db_path, since=since, until=until)
         for r in rows:
             r["active_seconds"] = float(active_by_day.get(r["day"], 0) or 0)
         return rows
