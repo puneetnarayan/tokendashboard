@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0A0E14"/>
+      <stop offset="1" stop-color="#131922"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="320" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4A9EFF"/>
+      <stop offset="1" stop-color="#7C5CFF"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A9EFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#4A9EFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="220" fill="url(#glow)"/>
+
+  <g transform="translate(96 156)">
+    <rect width="200" height="200" rx="38" fill="#0F1419" stroke="#1d2735" stroke-width="2"/>
+    <text x="100" y="148" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+          font-size="148" font-weight="700" text-anchor="middle" fill="url(#accent)">$</text>
+  </g>
+
+  <g transform="translate(332 200)" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" fill="#E6EDF3">
+    <text x="0" y="0" font-size="78" font-weight="700">Token Dashboard</text>
+    <text x="0" y="58" font-size="28" font-weight="500" fill="#8B98A6">Claude Code usage analytics</text>
+    <text x="0" y="138" font-size="22" fill="#8B98A6">Multi-host aggregation · FTS5 prompt search · Calendar heatmap</text>
+    <text x="0" y="170" font-size="22" fill="#8B98A6">RTK savings · Lanes telemetry · Per-prompt cost drill-down</text>
+  </g>
+
+  <g transform="translate(96 510)">
+    <rect width="60" height="32" rx="6" fill="#0F1419" stroke="#1d2735"/>
+    <text x="30" y="22" font-family="ui-monospace, SFMono-Regular, monospace" font-size="14" text-anchor="middle" fill="#4A9EFF">JLAP</text>
+
+    <rect x="72" width="84" height="32" rx="6" fill="#0F1419" stroke="#1d2735"/>
+    <text x="114" y="22" font-family="ui-monospace, SFMono-Regular, monospace" font-size="14" text-anchor="middle" fill="#4A9EFF">Jstation</text>
+
+    <rect x="168" width="56" height="32" rx="6" fill="#0F1419" stroke="#1d2735"/>
+    <text x="196" y="22" font-family="ui-monospace, SFMono-Regular, monospace" font-size="14" text-anchor="middle" fill="#4A9EFF">JPC</text>
+  </g>
+
+  <text x="1104" y="546" font-family="system-ui, sans-serif" font-size="20" text-anchor="end" fill="#8B98A6">stdlib · vanilla · local-only</text>
+</svg>

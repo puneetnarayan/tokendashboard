@@ -563,6 +563,21 @@ def _encode_slug(path: str) -> str:
     return re.sub(r"[:\\/ ]", "-", path)
 
 
+# Container directories that are NOT projects themselves. If a slug's best-cwd
+# resolves to one of these, the slug stays standalone — children are not rolled
+# up into it. Prevents pathological merges like every Claude session under
+# /home/jstationadmin collapsing into a single "jstationadmin" row.
+_NON_PROJECT_CWDS = frozenset({
+    "/", "/tmp", "/var", "/opt", "/etc", "/mnt",
+    "/home", "/home/dvids", "/home/jstationadmin",
+    "/home/dvids/Dev", "/mnt/data/dev", "/mnt/data",
+    "/home/dvids/.claude", "/home/jstationadmin/.claude",
+    "/home/dvids/.claude-mem", "/home/jstationadmin/.claude-mem",
+    "/mnt/data/obsidian", "/mnt/jstation/data/obsidian", "/mnt/jstation/data",
+    "/home/dvids/gsd-workspaces", "/home/jstationadmin/gsd-workspaces",
+})
+
+
 def _walk_to_root(cwd: str, slug: str) -> Optional[str]:
     """If any ancestor of cwd encodes to slug, return that ancestor's basename."""
     if not cwd or not slug:
@@ -671,11 +686,150 @@ def expensive_prompts(db_path, limit: int = 50, sort: str = "tokens") -> list:
         return [dict(r) for r in c.execute(sql, (limit,))]
 
 
+def _best_cwd_per_slug(conn, slugs) -> dict:
+    """Pick a representative cwd per slug.
+
+    Why: `MIN(cwd)` is contaminated by `cd`-into-subdirectory side trips
+    (Claude commonly cd's into ~/.claude/skills/... during a session, which
+    sorts lexicographically before the real project root and wins MIN()).
+    The selection rule below picks the cwd that *encodes back to the slug*
+    if one exists, then a descendant cwd, then the most-frequent cwd.
+
+    How to apply: pass a set of project_slugs and the rollup logic uses the
+    returned dict for both display-name walks and host detection.
+    """
+    if not slugs:
+        return {}
+    # One query — all cwds with counts, grouped per slug.
+    placeholders = ",".join("?" * len(slugs))
+    rows = conn.execute(
+        f"SELECT project_slug, cwd, COUNT(*) AS c FROM messages "
+        f"WHERE cwd IS NOT NULL AND project_slug IN ({placeholders}) "
+        f"GROUP BY project_slug, cwd",
+        list(slugs),
+    ).fetchall()
+    by_slug = {}
+    for r in rows:
+        by_slug.setdefault(r[0], []).append((r[1], r[2]))
+    best = {}
+    for slug, lst in by_slug.items():
+        lst.sort(key=lambda x: -x[1])
+        exact = next((c for c, _ in lst if _encode_slug(c) == slug), None)
+        if exact:
+            best[slug] = exact; continue
+        prefix = next((c for c, _ in lst if _encode_slug(c).startswith(slug + "-")), None)
+        if prefix:
+            best[slug] = prefix; continue
+        best[slug] = lst[0][0]
+    return best
+
+
+def _host_per_slug(conn, slugs) -> dict:
+    if not slugs:
+        return {}
+    placeholders = ",".join("?" * len(slugs))
+    rows = conn.execute(
+        f"SELECT project_slug, host, COUNT(*) AS c FROM messages "
+        f"WHERE project_slug IN ({placeholders}) "
+        f"GROUP BY project_slug, host",
+        list(slugs),
+    ).fetchall()
+    by_slug = {}
+    for slug, host, c in rows:
+        by_slug.setdefault(slug, []).append((host, c))
+    return {slug: max(lst, key=lambda x: x[1])[0] for slug, lst in by_slug.items()}
+
+
+def _rollup_projects(conn, rows) -> list:
+    """Roll sub-path slugs into their parent, then merge cross-host duplicates.
+
+    Sub-path roll-up: a slug becomes a child of an existing slug iff the parent
+    slug is present in the result set AND its best-cwd is not in
+    `_NON_PROJECT_CWDS`. This stops pathological collapses like all sessions
+    under `/home/jstationadmin` being merged into one "jstationadmin" row.
+
+    Cross-host merge: after sub-path roll-up, rows whose display-name matches
+    across hosts are unioned into one row carrying both host tags.
+    """
+    rows = [dict(r) for r in rows]
+    slugs = sorted({r["project_slug"] for r in rows})
+    best_cwd = _best_cwd_per_slug(conn, slugs)
+    host_of = _host_per_slug(conn, slugs)
+
+    eligible_parents = {
+        slug for slug in slugs
+        if (best_cwd.get(slug, "") or "").rstrip("/") not in _NON_PROJECT_CWDS
+    }
+
+    def find_parent(slug):
+        # Walk progressively shorter slug prefixes (split on `-`); the longest
+        # eligible prefix in the set wins. Slug encoding collapses `/` to `-`,
+        # so a `-` boundary is the only structural cue we have.
+        parts = slug.split("-")
+        for i in range(len(parts) - 1, 0, -1):
+            candidate = "-".join(parts[:i])
+            if candidate and candidate in eligible_parents and candidate != slug:
+                return candidate
+        return None
+
+    parent = {s: find_parent(s) for s in slugs}
+
+    def resolve_root(s, _seen=None):
+        seen = _seen or set()
+        while parent.get(s) and s not in seen:
+            seen.add(s); s = parent[s]
+        return s
+
+    root_of = {s: resolve_root(s) for s in slugs}
+
+    # Aggregate per root slug.
+    grouped = {}
+    for r in rows:
+        root = root_of[r["project_slug"]]
+        if root not in grouped:
+            grouped[root] = {
+                "project_slug": root,
+                "project_name": project_name_for(best_cwd.get(root), root),
+                "sessions": 0, "turns": 0,
+                "input_tokens": 0, "output_tokens": 0,
+                "billable_tokens": 0, "cache_read_tokens": 0,
+                "hosts": set(),
+                "contributing_slugs": [],
+            }
+        g = grouped[root]
+        for k in ("sessions", "turns", "input_tokens", "output_tokens",
+                  "billable_tokens", "cache_read_tokens"):
+            g[k] += int(r.get(k) or 0)
+        h = host_of.get(r["project_slug"])
+        if h: g["hosts"].add(h)
+        g["contributing_slugs"].append(r["project_slug"])
+
+    # Cross-host merge by display name.
+    by_name = {}
+    for g in grouped.values():
+        key = g["project_name"]
+        if key not in by_name:
+            by_name[key] = g; continue
+        b = by_name[key]
+        for k in ("sessions", "turns", "input_tokens", "output_tokens",
+                  "billable_tokens", "cache_read_tokens"):
+            b[k] += g[k]
+        b["hosts"].update(g["hosts"])
+        b["contributing_slugs"].extend(g["contributing_slugs"])
+
+    out = []
+    for v in by_name.values():
+        v["hosts"] = sorted(v["hosts"])
+        v["contributing_slugs"] = sorted(set(v["contributing_slugs"]))
+        out.append(v)
+    out.sort(key=lambda r: -r["billable_tokens"])
+    return out
+
+
 def project_summary(db_path, since=None, until=None) -> list:
     rng, args = _range_clause(since, until)
     sql = f"""
       SELECT project_slug,
-             MIN(cwd) AS sample_cwd,
              COUNT(DISTINCT session_id) AS sessions,
              SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
              COALESCE(SUM(input_tokens), 0)  AS input_tokens,
@@ -686,7 +840,6 @@ def project_summary(db_path, since=None, until=None) -> list:
         FROM messages m
        WHERE 1=1 {rng}
        GROUP BY project_slug
-       ORDER BY billable_tokens DESC
     """
     with connect(db_path) as c:
         if _summary_ready(c):
@@ -700,7 +853,6 @@ def project_summary(db_path, since=None, until=None) -> list:
             """
             rows = [dict(r) for r in c.execute(f"""
               SELECT p.project_slug,
-                     MIN(p.sample_cwd) AS sample_cwd,
                      COALESCE(s.sessions, 0) AS sessions,
                      COALESCE(SUM(p.turns), 0) AS turns,
                      COALESCE(SUM(p.input_tokens), 0) AS input_tokens,
@@ -713,15 +865,10 @@ def project_summary(db_path, since=None, until=None) -> list:
                 LEFT JOIN ({session_sql}) s ON s.project_slug = p.project_slug
                WHERE 1=1 {day_rng}
                GROUP BY p.project_slug
-               ORDER BY billable_tokens DESC
             """, (*sess_args, *day_args))]
-            for r in rows:
-                r["project_name"] = project_name_for(r.pop("sample_cwd", None), r["project_slug"])
-            return rows
+            return _rollup_projects(c, rows)
         rows = [dict(r) for r in c.execute(sql, args)]
-        for r in rows:
-            r["project_name"] = project_name_for(r.pop("sample_cwd", None), r["project_slug"])
-    return rows
+        return _rollup_projects(c, rows)
 
 
 def tool_token_breakdown(db_path, since=None, until=None) -> list:

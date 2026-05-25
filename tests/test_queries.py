@@ -245,6 +245,132 @@ class ProjectNameTests(unittest.TestCase):
             "Token Dashboard",
         )
 
+
+class ProjectRollupTests(unittest.TestCase):
+    """Cover the MIN(cwd) fix, sub-path roll-up, and cross-host merge.
+
+    Each test seeds messages and asserts on project_summary() output. No
+    rebuild_summaries() — the rollup runs in both the summary and raw paths.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "rollup.db")
+        init_db(self.db)
+
+    def _insert(self, rows):
+        with connect(self.db) as c:
+            for r in rows:
+                c.execute(
+                    "INSERT INTO messages "
+                    "(uuid, session_id, project_slug, host, cwd, type, timestamp, "
+                    " input_tokens, output_tokens, cache_read_tokens, "
+                    " cache_create_5m_tokens, cache_create_1h_tokens) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        r["uuid"], r["session_id"], r["slug"], r.get("host", "jstation"),
+                        r["cwd"], r.get("type", "assistant"), r["ts"],
+                        r.get("in", 0), r.get("out", 0), r.get("cr", 0),
+                        r.get("c5", 0), r.get("c1", 0),
+                    ),
+                )
+            c.commit()
+
+    def test_naming_ignores_wrong_min_cwd(self):
+        # Slug encodes /mnt/data/dev/greybox-web. MIN(cwd) is the noise cwd
+        # /home/jstationadmin/.claude. The fix must pick the cwd whose
+        # encoded form matches the slug.
+        slug = "-mnt-data-dev-greybox-web"
+        self._insert([
+            {"uuid": "a1", "session_id": "s1", "slug": slug,
+             "cwd": "/mnt/data/dev/greybox-web", "ts": "2026-04-10T00:00:00Z", "in": 100},
+            {"uuid": "a2", "session_id": "s1", "slug": slug,
+             "cwd": "/home/jstationadmin/.claude", "ts": "2026-04-10T00:01:00Z", "in": 5},
+        ])
+        rows = project_summary(self.db)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["project_name"], "greybox-web")
+
+    def test_subpath_rolls_up_into_parent(self):
+        parent = "-mnt-data-dev-greybox-web"
+        child = "-mnt-data-dev-greybox-web-tools-cd-import"
+        self._insert([
+            {"uuid": "a1", "session_id": "s1", "slug": parent,
+             "cwd": "/mnt/data/dev/greybox-web", "ts": "2026-04-10T00:00:00Z", "in": 100},
+            {"uuid": "a2", "session_id": "s2", "slug": child,
+             "cwd": "/mnt/data/dev/greybox-web/tools/cd-import", "ts": "2026-04-10T00:01:00Z", "in": 50},
+        ])
+        rows = project_summary(self.db)
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertEqual(r["project_name"], "greybox-web")
+        self.assertEqual(r["input_tokens"], 150)
+        self.assertIn(parent, r["contributing_slugs"])
+        self.assertIn(child, r["contributing_slugs"])
+
+    def test_orphan_subpath_stays_standalone(self):
+        # Only the child slug exists — no parent in the result set, so the
+        # child stays as its own row.
+        child = "-mnt-data-dev-greybox-web-tools-cd-import"
+        self._insert([
+            {"uuid": "a1", "session_id": "s1", "slug": child,
+             "cwd": "/mnt/data/dev/greybox-web/tools/cd-import", "ts": "2026-04-10T00:00:00Z", "in": 50},
+        ])
+        rows = project_summary(self.db)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["contributing_slugs"], [child])
+
+    def test_non_project_parent_does_not_swallow_children(self):
+        # /home/jstationadmin is in _NON_PROJECT_CWDS — slugs at that level
+        # must not act as a roll-up parent for unrelated nested projects.
+        home_slug = "-home-jstationadmin"
+        proj_slug = "-home-jstationadmin--claude-mem-observer-sessions"
+        self._insert([
+            {"uuid": "a1", "session_id": "s1", "slug": home_slug,
+             "cwd": "/home/jstationadmin", "ts": "2026-04-10T00:00:00Z", "in": 100},
+            {"uuid": "a2", "session_id": "s2", "slug": proj_slug,
+             "cwd": "/home/jstationadmin/.claude-mem/observer-sessions",
+             "ts": "2026-04-10T00:01:00Z", "in": 50},
+        ])
+        rows = project_summary(self.db)
+        names = sorted(r["project_name"] for r in rows)
+        self.assertEqual(names, ["jstationadmin", "observer-sessions"])
+
+    def test_cross_host_merge(self):
+        # Same project on two hosts — different slugs but identical
+        # project_name. Rollup should merge them into one row carrying
+        # both hosts.
+        self._insert([
+            {"uuid": "a1", "session_id": "s1", "slug": "-mnt-data-dev-greybox-web",
+             "host": "jstation",
+             "cwd": "/mnt/data/dev/greybox-web", "ts": "2026-04-10T00:00:00Z", "in": 100},
+            {"uuid": "a2", "session_id": "s2", "slug": "-home-dvids-Dev-greybox-web",
+             "host": "jlap",
+             "cwd": "/home/dvids/Dev/greybox-web", "ts": "2026-04-10T00:01:00Z", "in": 50},
+        ])
+        rows = project_summary(self.db)
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertEqual(r["project_name"], "greybox-web")
+        self.assertEqual(r["input_tokens"], 150)
+        self.assertEqual(r["hosts"], ["jlap", "jstation"])
+
+    def test_response_shape_unchanged_for_consumers(self):
+        # The Projects UI relies on these keys — guard against rename drift.
+        self._insert([
+            {"uuid": "a1", "session_id": "s1", "slug": "-mnt-data-dev-greybox-web",
+             "cwd": "/mnt/data/dev/greybox-web", "ts": "2026-04-10T00:00:00Z",
+             "in": 1, "out": 2, "cr": 3, "c5": 4, "c1": 5},
+        ])
+        r = project_summary(self.db)[0]
+        for k in (
+            "project_slug", "project_name", "sessions", "turns",
+            "input_tokens", "output_tokens",
+            "billable_tokens", "cache_read_tokens",
+            "hosts", "contributing_slugs",
+        ):
+            self.assertIn(k, r, f"missing key {k!r} from project_summary row")
+
     def test_trailing_slash_stripped(self):
         self.assertEqual(project_name_for("/a/b/c/", "slug"), "c")
 
