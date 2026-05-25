@@ -44,7 +44,8 @@ if ! flock -n 9; then
 fi
 
 RTK_CACHE_ROOT="$HOME/.cache/token-dashboard/rtk-state"
-mkdir -p "$RTK_CACHE_ROOT"
+LANES_CACHE="$HOME/.cache/token-dashboard/lanes-logs"
+mkdir -p "$RTK_CACHE_ROOT" "$LANES_CACHE"
 
 # Per host we pull TWO trees:
 #   1. ~/.claude/projects/   → CACHE_ROOT/<host>/projects/   (transcript JSONLs)
@@ -85,6 +86,16 @@ for host in "${HOSTS[@]}"; do
     successes=$((successes + 1))
   fi
 done
+
+# Lanes invocation logs — pulled from Jstation only (that's where the
+# global lanes ledger aggregates per-machine ndjsons). Single best-effort
+# rsync, ignored if missing.
+if rsync -az --partial --timeout=30 -e "ssh $ssh_opts" \
+     "jstation:/mnt/data/lanes-logs/" "$LANES_CACHE/" >> "$LOG_FILE" 2>&1; then
+  log "ok: jstation lanes-logs -> $LANES_CACHE"
+else
+  log "skip: jstation lanes-logs rsync exit $?"
+fi
 
 if (( successes == 0 )); then
   log "all hosts failed"

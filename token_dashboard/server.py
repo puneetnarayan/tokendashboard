@@ -18,8 +18,9 @@ from .db import (
     overview_totals, expensive_prompts, project_summary,
     tool_token_breakdown, recent_sessions, session_turns,
     daily_token_breakdown, model_breakdown, skill_breakdown,
-    scan_status,
+    scan_status, search_prompts,
 )
+from .lanes_stats import lanes_stats
 from .pricing import load_pricing, cost_for, get_plan, set_plan
 from .tips import all_tips, dismiss_tip
 from .scanner import scan_roots
@@ -91,6 +92,38 @@ def _bundle_cache_key(since, until) -> str:
     return f"/api/overview-bundle?since={s}&until={u}"
 
 
+def _prev_window(since, until):
+    """For a window [since, until), return [since - duration, since) so KPI
+    cards can show +/-% deltas. Returns (None, None) when no comparison is
+    possible (all-time view, or window has no defined start).
+
+    The frontend sends ISO 8601 strings that may include a timezone offset
+    (e.g. ``2026-05-18T01:43:39.812345+00:00``). Normalise to naive UTC so
+    arithmetic with utcnow() works without raising on tz-aware vs naive
+    mixing.
+    """
+    if not since:
+        return None, None
+
+    def _parse(iso: str):
+        s = iso.replace("Z", "+00:00")
+        dt = datetime.datetime.fromisoformat(s)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return dt
+
+    try:
+        s = _parse(since)
+        u = _parse(until) if until else datetime.datetime.utcnow()
+    except ValueError:
+        return None, None
+    duration = u - s
+    if duration.total_seconds() <= 0:
+        return None, None
+    prev_s = (s - duration).isoformat() + "Z"
+    return prev_s, since
+
+
 def _overview_bundle(db_path: str, since, until, pricing: dict) -> dict:
     """Run all overview-page queries and return a single combined payload."""
     by_model = model_breakdown(db_path, since, until)
@@ -103,8 +136,28 @@ def _overview_bundle(db_path: str, since, until, pricing: dict) -> dict:
         if c["usd"] is not None:
             cost_usd += c["usd"]
     totals["cost_usd"] = round(cost_usd, 4)
+
+    # Period-over-period: same-duration window immediately before `since`.
+    # Compute the same scalar totals + cost so the UI can render +/-% deltas
+    # on every KPI without an extra round trip.
+    prev_since, prev_until = _prev_window(since, until)
+    prev_totals = None
+    if prev_since:
+        prev_totals = overview_totals(db_path, prev_since, prev_until)
+        prev_by_model = model_breakdown(db_path, prev_since, prev_until)
+        prev_cost = 0.0
+        for m in prev_by_model:
+            c = cost_for(m["model"], m, pricing)
+            if c["usd"] is not None:
+                prev_cost += c["usd"]
+        prev_totals["cost_usd"] = round(prev_cost, 4)
+
     return {
         "totals": totals,
+        "prev_totals": prev_totals,
+        "prev_period": (
+            {"since": prev_since, "until": prev_until} if prev_since else None
+        ),
         "projects": project_summary(db_path, since, until),
         "sessions": recent_sessions(db_path, limit=10, since=since, until=until),
         "tools": tool_token_breakdown(db_path, since, until),
@@ -584,6 +637,24 @@ def build_handler(db_path: str, projects_roots):
                 # progress indicator during a long initial backfill.
                 data = scan_status(db_path)
                 data["is_scanning"] = _SCAN_LOCK.locked()
+                return _send_json(self, data)
+            if path == "/api/search":
+                q = qs.get("q", [""])[0].strip()
+                if not q:
+                    return _send_json(self, {"results": [], "query": ""})
+                limit = _clamp_limit(qs.get("limit", ["50"])[0], 50)
+                try:
+                    results = search_prompts(db_path, q, limit=limit)
+                except Exception as e:
+                    return _send_json(self, {"results": [], "query": q, "error": str(e)})
+                return _send_json(self, {"results": results, "query": q})
+            if path == "/api/lanes":
+                cached = _cache_get(cache_key)
+                if cached is not None:
+                    return _send_json(self, cached)
+                since = qs.get("since", [None])[0]
+                data = lanes_stats(since_iso=since)
+                _cache_set(cache_key, data)
                 return _send_json(self, data)
             if path == "/api/rtk":
                 # Cache the aggregated payload: each call subprocess-shells

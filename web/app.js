@@ -86,6 +86,32 @@ export function cacheGet(key) {
 export function cacheSet(key, data) { _cache.set(key, { data, ts: Date.now() }); }
 export function cacheClear()        { _cache.clear(); }
 
+// ── Toast notifications ──────────────────────────────────────────────────────
+// Lightweight top-right pop-up — auto-dismisses. Three flavors: info (default),
+// ok (success/green), err (red). Stacks vertically when fired in quick succession.
+export function showToast(msg, kind = 'info', ttl = 3000) {
+  const host = document.getElementById('toast-host');
+  if (!host) return;
+  const t = document.createElement('div');
+  t.className = `toast toast-${kind}`;
+  t.textContent = msg;
+  host.appendChild(t);
+  // Trigger CSS transition on next frame.
+  requestAnimationFrame(() => t.classList.add('show'));
+  setTimeout(() => {
+    t.classList.remove('show');
+    setTimeout(() => t.remove(), 250);
+  }, ttl);
+}
+
+// ── Empty state helper ───────────────────────────────────────────────────────
+// Tables across routes call this when their data array is empty, so we get a
+// consistent "we looked and there's nothing here" experience instead of a
+// silent blank.
+export function emptyState(label) {
+  return `<tr><td colspan="99" class="muted" style="text-align:center;padding:22px">${fmt.htmlSafe(label || 'No data in this range')}</td></tr>`;
+}
+
 // ── Refresh / countdown state ─────────────────────────────────────────────────
 const SCAN_INTERVAL = 60_000; // must match server _scan_loop interval
 let _nextScanAt  = Date.now() + SCAN_INTERVAL;
@@ -208,6 +234,8 @@ const ROUTES = {
   '/skills':   () => import('/web/routes/skills.js'),
   '/tips':     () => import('/web/routes/tips.js'),
   '/rtk':      () => import('/web/routes/rtk.js'),
+  '/lanes':    () => import('/web/routes/lanes.js'),
+  '/search':   () => import('/web/routes/search.js'),
   '/settings': () => import('/web/routes/settings.js'),
 };
 
@@ -216,16 +244,39 @@ function buildTopbar() {
   wrap.className = 'topbar';
   wrap.innerHTML = `
     <div class="brand">Token Dashboard</div>
+    <button class="topbar-toggle" id="topbar-toggle" aria-label="Menu">☰</button>
     <nav>
-      ${Object.keys(ROUTES).map(p => `<a href="#${p}" data-route="${p}">${p.slice(1)}</a>`).join('')}
+      ${Object.keys(ROUTES).filter(p => p !== '/search').map(p => `<a href="#${p}" data-route="${p}">${p.slice(1)}</a>`).join('')}
     </nav>
     <div class="spacer"></div>
+    <input id="topbar-search" type="search" placeholder="Search prompts (/)"
+      title="Press / anywhere to focus this. Press Enter to run the search."
+      style="background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;font-family:var(--sans);width:200px" />
     <span class="pill scan-pill" id="scan-status-pill" title="Loading…">scan</span>
     <span class="pill" id="plan-pill">api</span>
     <span class="pill muted" title="Cmd/Ctrl+B blurs sensitive text">⌘B blur</span>
     <button id="refresh-btn" class="refresh-btn" title="Manually refresh data">↻ 60s</button>
   `;
   document.body.prepend(wrap);
+  // Mobile menu toggle
+  wrap.querySelector('#topbar-toggle')?.addEventListener('click', () => {
+    wrap.classList.toggle('open');
+  });
+  // Topbar search wires Enter to navigate /search?q=
+  const sb = wrap.querySelector('#topbar-search');
+  sb?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      const q = sb.value.trim();
+      location.hash = '#/search' + (q ? '?q=' + encodeURIComponent(q) : '');
+    }
+  });
+  // Toast container is appended once, used by showToast()
+  if (!document.getElementById('toast-host')) {
+    const tc = document.createElement('div');
+    tc.id = 'toast-host';
+    tc.className = 'toast-host';
+    document.body.appendChild(tc);
+  }
 
   // Refresh banner — inserted between topbar and #app
   const banner = document.createElement('div');
@@ -307,6 +358,34 @@ async function boot() {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
       e.preventDefault();
       document.body.classList.toggle('privacy-on');
+    }
+  });
+
+  // Global keyboard shortcuts. Skip when the user is typing in an input,
+  // textarea, or contenteditable element so shortcuts don't hijack search.
+  let _gPending = false;
+  document.addEventListener('keydown', e => {
+    const t = e.target;
+    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+    // `/` → focus the topbar search (works even while typing in some cases,
+    // so we explicitly do skip when the target is the search input itself).
+    if (e.key === '/' && !(typing && t.id === 'topbar-search')) {
+      e.preventDefault();
+      document.getElementById('topbar-search')?.focus();
+      return;
+    }
+    if (typing) return;
+    if (e.key === '?') { showToast('Shortcuts: g+o overview, g+s sessions, g+p prompts, g+r rtk, g+l lanes, / search', 'info', 5000); return; }
+    if (e.key.toLowerCase() === 'g' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      _gPending = true;
+      setTimeout(() => { _gPending = false; }, 1500);
+      return;
+    }
+    if (_gPending) {
+      _gPending = false;
+      const map = { o: '/overview', s: '/sessions', p: '/prompts', r: '/rtk', l: '/lanes', j: '/projects', k: '/skills', t: '/tips' };
+      const route = map[e.key.toLowerCase()];
+      if (route) { location.hash = '#' + route; e.preventDefault(); }
     }
   });
 

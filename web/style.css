@@ -294,3 +294,76 @@ hr.divider { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
   .glossary dl { grid-template-columns: 1fr; gap: 4px 0; }
   .glossary dt { margin-top: 10px; }
 }
+
+/* ── Toast notifications ──────────────────────────────────────────────── */
+.toast-host {
+  position: fixed; top: 64px; right: 16px; z-index: 100;
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  background: var(--panel); border: 1px solid var(--border-2);
+  color: var(--text); padding: 10px 14px; border-radius: 8px;
+  font-size: 13px; min-width: 180px; max-width: 360px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+  opacity: 0; transform: translateY(-6px);
+  transition: opacity 220ms ease, transform 220ms ease;
+  pointer-events: auto;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast-ok  { border-color: rgba(63,182,139,0.5); }
+.toast-err { border-color: rgba(229,72,77,0.6); color: #FFB4B6; }
+
+/* ── Skeleton placeholders ────────────────────────────────────────────── */
+@keyframes skeleton-pulse {
+  0%, 100% { background-color: var(--panel-2); }
+  50%      { background-color: var(--border); }
+}
+.skel {
+  display: inline-block; border-radius: 4px;
+  background: var(--panel-2);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.skel-line { height: 14px; width: 100%; margin: 6px 0; }
+.skel-kpi  { height: 28px; width: 80%; margin: 8px 0; }
+.skel-chart { display: block; height: 240px; width: 100%; border-radius: 8px; }
+
+/* ── Topbar search + mobile nav ───────────────────────────────────────── */
+.topbar-toggle {
+  display: none;
+  background: transparent; border: 0; color: var(--text);
+  font-size: 22px; padding: 4px 8px; cursor: pointer;
+}
+@media (max-width: 900px) {
+  header.topbar { flex-wrap: wrap; padding: 8px 12px; gap: 8px; }
+  .topbar-toggle { display: inline-block; }
+  .topbar nav {
+    display: none; flex-basis: 100%;
+    flex-direction: column; gap: 0;
+    border-top: 1px solid var(--border); padding: 8px 0;
+    margin: 0;
+  }
+  header.topbar.open nav { display: flex; }
+  .topbar nav a { padding: 10px 14px; border-radius: 0; }
+  #topbar-search { width: 140px !important; }
+  .row.cols-7 { grid-template-columns: 1fr 1fr !important; }
+  .row.cols-4 { grid-template-columns: 1fr 1fr !important; }
+  .row.cols-3 { grid-template-columns: 1fr !important; }
+  .row.cols-2 { grid-template-columns: 1fr !important; }
+  main#app { padding: 16px 12px; }
+  .kpi .value { font-size: 20px; }
+  table th, table td { padding: 8px 8px; }
+}
+@media (max-width: 520px) {
+  #topbar-search { display: none; }
+  .topbar .pill, .topbar .refresh-btn { font-size: 12px; padding: 4px 8px; }
+  .scan-pill { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ── Calendar heatmap ─────────────────────────────────────────────────── */
+#ch-heatmap svg { display: block; min-width: 760px; }
+#ch-heatmap rect:hover { stroke: var(--accent); stroke-width: 1; }
+
+/* ── Topbar search input always wears the dark theme ──────────────────── */
+#topbar-search::placeholder { color: var(--muted-2); }
+#topbar-search:focus { outline: none; border-color: var(--accent); }

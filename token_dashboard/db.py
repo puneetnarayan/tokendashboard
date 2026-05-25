@@ -161,6 +161,34 @@ def default_db_path() -> Path:
     return Path.home() / ".claude" / "token-dashboard.db"
 
 
+def search_prompts(db_path, query: str, limit: int = 50) -> list:
+    """Full-text search over user prompts, FTS5-backed.
+
+    Returns hits ranked by relevance with a 32-token snippet showing the
+    surrounding context (matched terms wrapped in <mark>). Each hit
+    includes session_id + project so the UI can link to session detail.
+
+    Query syntax is raw FTS5 — supports phrase queries, prefix (foo*),
+    boolean (foo AND bar). Caller is responsible for catching
+    sqlite3.OperationalError on malformed queries.
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    sql = """
+      SELECT m.uuid, m.session_id, m.host, m.project_slug, m.timestamp, m.cwd,
+             snippet(messages_fts, 0, '<mark>', '</mark>', '…', 24) AS snippet,
+             rank
+        FROM messages_fts
+        JOIN messages m ON m.rowid = messages_fts.rowid
+       WHERE messages_fts MATCH ?
+       ORDER BY rank
+       LIMIT ?
+    """
+    with connect(db_path) as c:
+        return [dict(r) for r in c.execute(sql, (q, limit))]
+
+
 def scan_status(db_path) -> dict:
     """Per-host scan progress for the dashboard staleness indicator.
 
@@ -217,6 +245,7 @@ def init_db(path: Union[str, Path]) -> None:
         _migrate_add_host(c)
         _migrate_add_host_summary(c)
         c.executescript(SCHEMA)
+        _migrate_add_fts(c)
 
 
 def _migrate_add_message_id(conn) -> None:
@@ -264,6 +293,51 @@ def _migrate_add_host(conn) -> None:
         "ALTER TABLE messages ADD COLUMN host TEXT NOT NULL DEFAULT 'jstation'"
     )
     conn.execute("UPDATE messages SET host='jstation' WHERE host IS NULL OR host=''")
+    conn.commit()
+
+
+def _migrate_add_fts(conn) -> None:
+    """Build the FTS5 virtual table over prompt_text so the Search tab can
+    find sessions by what you typed. Triggers keep the index in sync with
+    the messages table; a one-time backfill seeds it from existing rows.
+
+    Why init_db runs this AFTER executescript(SCHEMA): the FTS triggers
+    reference the messages table, so it must already exist. Tables created
+    in executescript don't trigger migrations to fire mid-stream.
+    """
+    has = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+    ).fetchone()
+    if has:
+        return
+    conn.executescript("""
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+            prompt_text,
+            content='messages',
+            content_rowid='rowid',
+            tokenize='porter unicode61'
+        );
+        CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, prompt_text)
+            VALUES (new.rowid, new.prompt_text);
+        END;
+        CREATE TRIGGER messages_fts_ad AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, prompt_text)
+            VALUES('delete', old.rowid, old.prompt_text);
+        END;
+        CREATE TRIGGER messages_fts_au AFTER UPDATE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, prompt_text)
+            VALUES('delete', old.rowid, old.prompt_text);
+            INSERT INTO messages_fts(rowid, prompt_text)
+            VALUES (new.rowid, new.prompt_text);
+        END;
+    """)
+    # Backfill from existing rows. NULLs become empty strings — FTS5
+    # tolerates empty content but won't index it for matching.
+    conn.execute(
+        "INSERT INTO messages_fts(rowid, prompt_text) "
+        "SELECT rowid, prompt_text FROM messages WHERE prompt_text IS NOT NULL"
+    )
     conn.commit()
 
 

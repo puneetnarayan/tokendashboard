@@ -47,16 +47,37 @@ export default async function (root) {
   renderBundle(root, fresh, range);
 }
 
-function renderBundle(root, { totals, projects, sessions, tools, daily, byModel }, range) {
+function renderBundle(root, bundle, range) {
+  const { totals, prev_totals, projects, sessions, tools, daily, byModel } = bundle;
   const cacheCreate =
     (totals.cache_create_5m_tokens || 0) +
     (totals.cache_create_1h_tokens || 0);
+  const prevCacheCreate = prev_totals
+    ? (prev_totals.cache_create_5m_tokens || 0) + (prev_totals.cache_create_1h_tokens || 0)
+    : null;
 
-  const kpi = (label, compactVal, fullVal, cls = '') => `
-    <div class="card kpi ${cls}">
-      <div class="label">${label}</div>
-      <div class="value" title="${fullVal}">${compactVal}</div>
-    </div>`;
+  // Period-over-period delta chip. Returns empty when there's no prev
+  // value to compare to (e.g. all-time view) or both sides are zero.
+  function delta(curr, prev) {
+    if (prev === null || prev === undefined) return '';
+    const c = Number(curr) || 0;
+    const p = Number(prev) || 0;
+    if (c === 0 && p === 0) return '';
+    if (p === 0) return `<div class="delta up">new</div>`;
+    const pct = ((c - p) / p) * 100;
+    const cls = pct > 0 ? 'up' : pct < 0 ? 'down' : '';
+    const sign = pct > 0 ? '+' : '';
+    return `<div class="delta ${cls}">${sign}${pct.toFixed(0)}% vs prev</div>`;
+  }
+
+  function kpi(label, curr, compactVal, fullVal, prev, cls = '') {
+    return `
+      <div class="card kpi ${cls}">
+        <div class="label">${label}</div>
+        <div class="value" title="${fullVal}">${compactVal}</div>
+        ${delta(curr, prev)}
+      </div>`;
+  }
 
   const rangeTabs = `
     <div class="range-tabs" role="tablist">
@@ -72,17 +93,22 @@ function renderBundle(root, { totals, projects, sessions, tools, daily, byModel 
     </div>
 
     <div class="row cols-7">
-      ${kpi('Sessions',     fmt.int(totals.sessions),       fmt.int(totals.sessions))}
-      ${kpi('Turns',        fmt.int(totals.turns),          fmt.int(totals.turns))}
-      ${kpi('Input',        fmt.compact(totals.input_tokens),       fmt.int(totals.input_tokens) + ' tokens')}
-      ${kpi('Output',       fmt.compact(totals.output_tokens),      fmt.int(totals.output_tokens) + ' tokens')}
-      ${kpi('Cache read',   fmt.compact(totals.cache_read_tokens),  fmt.int(totals.cache_read_tokens) + ' tokens')}
-      ${kpi('Cache create', fmt.compact(cacheCreate),               fmt.int(cacheCreate) + ' tokens')}
+      ${kpi('Sessions',     totals.sessions,           fmt.int(totals.sessions),           fmt.int(totals.sessions),                              prev_totals && prev_totals.sessions)}
+      ${kpi('Turns',        totals.turns,              fmt.int(totals.turns),              fmt.int(totals.turns),                                 prev_totals && prev_totals.turns)}
+      ${kpi('Input',        totals.input_tokens,       fmt.compact(totals.input_tokens),   fmt.int(totals.input_tokens) + ' tokens',              prev_totals && prev_totals.input_tokens)}
+      ${kpi('Output',       totals.output_tokens,      fmt.compact(totals.output_tokens),  fmt.int(totals.output_tokens) + ' tokens',             prev_totals && prev_totals.output_tokens)}
+      ${kpi('Cache read',   totals.cache_read_tokens,  fmt.compact(totals.cache_read_tokens), fmt.int(totals.cache_read_tokens) + ' tokens',     prev_totals && prev_totals.cache_read_tokens)}
+      ${kpi('Cache create', cacheCreate,               fmt.compact(cacheCreate),           fmt.int(cacheCreate) + ' tokens',                      prevCacheCreate)}
       <div class="card kpi cost">
         <div class="label">Est. cost</div>
         <div class="value" title="${fmt.usd(totals.cost_usd)}">${fmt.usd(totals.cost_usd)}</div>
-        ${planSubtitle()}
+        ${delta(totals.cost_usd, prev_totals && prev_totals.cost_usd) || planSubtitle()}
       </div>
+    </div>
+
+    <div class="card" id="heatmap-card" style="margin-top:16px">
+      <h3 style="display:flex;align-items:center"><span>When you use Claude</span><span class="spacer"></span><span class="muted" style="font-size:12px">last 365 days · darker = more tokens</span></h3>
+      <div id="ch-heatmap" style="overflow-x:auto"></div>
     </div>
 
     <details class="card glossary" style="margin-top:16px">
@@ -143,6 +169,11 @@ function renderBundle(root, { totals, projects, sessions, tools, daily, byModel 
     btn.addEventListener('click', () => writeRange(btn.dataset.range));
   });
 
+  // Calendar heatmap — independent of the range tabs (it's always "last
+  // 365 days" so the user can see when they actually code regardless of
+  // which range is selected for the KPIs/charts).
+  renderHeatmap(root.querySelector('#ch-heatmap'));
+
   stackedBarChart(document.getElementById('ch-daily-billable'), {
     categories: daily.map(d => d.day),
     series: [
@@ -192,4 +223,62 @@ function planSubtitle() {
   const p = state.pricing.plans[state.plan];
   if (!p || !p.monthly) return '';
   return `<div class="sub">pay $${p.monthly}/mo on ${fmt.htmlSafe(p.label)}</div>`;
+}
+
+// ── Calendar heatmap (last 365 days) ─────────────────────────────────────────
+async function renderHeatmap(host) {
+  if (!host) return;
+  const since = new Date(Date.now() - 365 * 86400_000).toISOString();
+  const cacheKey = '/api/daily?since=' + encodeURIComponent(since);
+  let daily = cacheGet(cacheKey);
+  if (!daily) {
+    daily = await api(cacheKey);
+    cacheSet(cacheKey, daily);
+  }
+  const totalsByDay = new Map(
+    daily.map(d => [d.day, (d.input_tokens || 0) + (d.output_tokens || 0)])
+  );
+  const today = new Date();
+  // Start on the most-recent Sunday so week columns are uniform.
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const startOffset = (end.getDay() + 1) % 7; // back up to Saturday-end-of-week
+  end.setDate(end.getDate() + (6 - end.getDay()));
+  const start = new Date(end);
+  start.setDate(start.getDate() - 52 * 7 - 6);
+  // 53 weeks × 7 days grid.
+  const cellSize = 11, cellGap = 3;
+  const cells = [];
+  const months = [];
+  let lastMonth = -1;
+  const max = Math.max(1, ...totalsByDay.values());
+  for (let w = 0; w < 53; w++) {
+    for (let d = 0; d < 7; d++) {
+      const day = new Date(start);
+      day.setDate(start.getDate() + w * 7 + d);
+      if (day > end) continue;
+      const iso = day.toISOString().slice(0, 10);
+      const v = totalsByDay.get(iso) || 0;
+      const intensity = v === 0 ? 0 : Math.max(0.2, Math.min(1, Math.log10(v + 1) / Math.log10(max + 1)));
+      const fill = v === 0 ? 'rgba(255,255,255,0.04)' : `rgba(74,158,255,${intensity.toFixed(2)})`;
+      const x = w * (cellSize + cellGap);
+      const y = d * (cellSize + cellGap);
+      cells.push(`<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" rx="2" fill="${fill}"><title>${iso} · ${v.toLocaleString()} tokens</title></rect>`);
+    }
+    // Month label above the first column of each new month.
+    const probe = new Date(start);
+    probe.setDate(start.getDate() + w * 7 + 6);
+    if (probe.getMonth() !== lastMonth) {
+      months.push(`<text x="${w * (cellSize + cellGap)}" y="-4" fill="#5A6573" font-size="10" font-family="Inter">${probe.toLocaleString('en', { month: 'short' })}</text>`);
+      lastMonth = probe.getMonth();
+    }
+  }
+  const dayLabels = ['Mon', 'Wed', 'Fri'].map((lbl, i) => {
+    const y = (i * 2 + 1) * (cellSize + cellGap) + cellSize - 2;
+    return `<text x="-20" y="${y}" fill="#5A6573" font-size="10" font-family="Inter">${lbl}</text>`;
+  }).join('');
+  const w = 53 * (cellSize + cellGap) + 26;
+  const h = 7 * (cellSize + cellGap) + 18;
+  host.innerHTML = `<svg width="${w}" height="${h}" viewBox="-26 -14 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
+    ${months.join('')}${dayLabels}${cells.join('')}
+  </svg>`;
 }
