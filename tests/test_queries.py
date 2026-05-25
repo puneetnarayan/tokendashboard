@@ -355,6 +355,62 @@ class ProjectRollupTests(unittest.TestCase):
         self.assertEqual(r["input_tokens"], 150)
         self.assertEqual(r["hosts"], ["jlap", "jstation"])
 
+    def test_homunculus_session_dirs_collapse_into_one_row(self):
+        # Every ~/.claude/homunculus/projects/<hex-id> path is a disposable
+        # Claude workspace. They MUST collapse into a single "homunculus"
+        # row instead of N hex-id rows.
+        sessions = ["4bdcb4e23612", "03ae16014848", "1e90afd7bd50"]
+        rows = []
+        for i, sid in enumerate(sessions):
+            slug = f"-home-jstationadmin--claude-homunculus-projects-{sid}"
+            cwd = f"/home/jstationadmin/.claude/homunculus/projects/{sid}"
+            rows.append({
+                "uuid": f"a{i}", "session_id": f"s{i}", "slug": slug, "cwd": cwd,
+                "ts": f"2026-04-1{i}T00:00:00Z", "in": 10 * (i + 1),
+            })
+        self._insert(rows)
+        result = project_summary(self.db)
+        self.assertEqual(len(result), 1)
+        r = result[0]
+        self.assertEqual(r["project_name"], "homunculus")
+        self.assertEqual(r["input_tokens"], 60)
+        self.assertEqual(len(r["contributing_slugs"]), 3)
+
+    def test_homunculus_collapses_across_hosts(self):
+        # Same pattern under JLAP (/home/dvids/.claude/homunculus/) and
+        # Jstation (/home/jstationadmin/.claude/homunculus/) must end up
+        # in one row.
+        self._insert([
+            {"uuid": "a1", "session_id": "s1",
+             "slug": "-home-jstationadmin--claude-homunculus-projects-aaaa1234",
+             "host": "jstation",
+             "cwd": "/home/jstationadmin/.claude/homunculus/projects/aaaa1234",
+             "ts": "2026-04-10T00:00:00Z", "in": 100},
+            {"uuid": "a2", "session_id": "s2",
+             "slug": "-home-dvids--claude-homunculus-projects-bbbb5678",
+             "host": "jlap",
+             "cwd": "/home/dvids/.claude/homunculus/projects/bbbb5678",
+             "ts": "2026-04-10T00:01:00Z", "in": 50},
+        ])
+        result = project_summary(self.db)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["project_name"], "homunculus")
+        self.assertEqual(result[0]["hosts"], ["jlap", "jstation"])
+        self.assertEqual(result[0]["input_tokens"], 150)
+
+    def test_collapse_pattern_requires_hex_leaf(self):
+        # ~/.claude/skills/foo/projects/bar must NOT collapse — bar isn't
+        # a hex session id. Guards against over-matching unrelated paths.
+        self._insert([
+            {"uuid": "a1", "session_id": "s1",
+             "slug": "-home-dvids--claude-skills-foo-projects-bar",
+             "cwd": "/home/dvids/.claude/skills/foo/projects/bar",
+             "ts": "2026-04-10T00:00:00Z", "in": 10},
+        ])
+        result = project_summary(self.db)
+        self.assertNotEqual(result[0]["project_name"], "skills")
+        self.assertNotEqual(result[0]["project_name"], "foo")
+
     def test_response_shape_unchanged_for_consumers(self):
         # The Projects UI relies on these keys — guard against rename drift.
         self._insert([

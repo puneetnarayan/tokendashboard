@@ -559,8 +559,56 @@ def _session_range_clause(since, until):
 
 
 def _encode_slug(path: str) -> str:
-    """Claude Code's project-slug encoding: each of `:`, `\\`, `/`, space → one `-`."""
-    return re.sub(r"[:\\/ ]", "-", path)
+    """Claude Code's project-slug encoding: `:`, `\\`, `/`, space, `.` → one `-`.
+
+    The `.` is the non-obvious one — observed in production slugs like
+    `-home-dvids-Dev-luisabuchaibe-com` for `/home/dvids/Dev/luisabuchaibe.com`
+    and `-home-jstationadmin--claude-mem-observer-sessions` for
+    `/home/jstationadmin/.claude-mem/observer-sessions`. Omitting `.` made
+    `_walk_to_root` fail for every dotted path, forcing the basename
+    fallback. Result was the same most of the time but exact slug-to-cwd
+    matching in `_best_cwd_per_slug` couldn't fire.
+    """
+    return re.sub(r"[:\\/ .]", "-", path)
+
+
+# Patterns for "ephemeral session directories" — paths that look like
+# auto-generated per-session workspaces and should all collapse into the
+# tool's canonical name. The leaf is required to look like a session id
+# (8+ hex chars) so we don't sweep up unrelated paths that happen to
+# contain `/projects/`.
+_HEX_ID = r"[0-9a-f]{8,}"
+_COLLAPSE_PATTERNS = [
+    # ~/.claude/<tool>/projects/<hex-id> — observed for claude-homunculus.
+    (
+        re.compile(rf"(?:^|.*/)\.claude/([A-Za-z][A-Za-z0-9_-]*)/projects/{_HEX_ID}(?:/.*)?$"),
+        lambda m: m.group(1),
+    ),
+    # ~/.claude-<tool>/projects/<hex-id> — alternative structure some
+    # plugins use (top-level dir instead of subdir).
+    (
+        re.compile(rf"(?:^|.*/)\.claude-([A-Za-z][A-Za-z0-9_-]*)/projects/{_HEX_ID}(?:/.*)?$"),
+        lambda m: f"claude-{m.group(1)}",
+    ),
+]
+
+
+def _collapse_pattern(cwd: Optional[str]) -> Optional[str]:
+    """If `cwd` looks like an ephemeral session dir, return the canonical
+    display name; otherwise None.
+
+    Recognizes Claude plugin per-session workspace dirs (e.g. every
+    `.claude/homunculus/projects/<hex>` collapses to `"homunculus"` so
+    cross-host merge in `_rollup_projects` rolls every session-id row
+    into one.
+    """
+    if not cwd:
+        return None
+    for pattern, fn in _COLLAPSE_PATTERNS:
+        m = pattern.match(cwd)
+        if m:
+            return fn(m)
+    return None
 
 
 # Container directories that are NOT projects themselves. If a slug's best-cwd
@@ -787,9 +835,11 @@ def _rollup_projects(conn, rows) -> list:
     for r in rows:
         root = root_of[r["project_slug"]]
         if root not in grouped:
+            root_cwd = best_cwd.get(root)
+            name = _collapse_pattern(root_cwd) or project_name_for(root_cwd, root)
             grouped[root] = {
                 "project_slug": root,
-                "project_name": project_name_for(best_cwd.get(root), root),
+                "project_name": name,
                 "sessions": 0, "turns": 0,
                 "input_tokens": 0, "output_tokens": 0,
                 "billable_tokens": 0, "cache_read_tokens": 0,
