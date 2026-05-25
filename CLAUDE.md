@@ -24,6 +24,14 @@ Claude Code writes one JSONL file per session to `~/.claude/projects/<project-sl
 
 ## Conventions
 
+### Project tracking — GitHub Issues + Projects
+
+Single source of truth: [Token Dashboard Roadmap](https://github.com/users/NewAiCoder/projects/5) + [Issues](https://github.com/NewAiCoder/token-dashboard/issues). Not scratchpads, not `.md` worklogs. See [`docs/TRACKING.md`](docs/TRACKING.md) for the full workflow.
+
+SessionStart hook (`~/.claude/hooks/session-start-token-dashboard.sh`) surfaces open Todo + In Progress + In Review on session start. PostToolUse hook (`~/.claude/hooks/post-bash-token-dashboard-link-commits.sh`) auto-comments + auto-closes on `(closes #N)` / `(refs #N)` in commit messages.
+
+### Code
+
 - **Fully local.** No telemetry, no remote calls for user data. Tests run offline.
 - **Stdlib only.** No `pip install`. If a new feature needs a third-party library, argue for it first — we're willing to pay ergonomics cost to keep install friction at zero.
 - **SQLite parameter binding always.** Any f-string in a SQL statement must interpolate only internal, caller-controlled values (column names, placeholder lists). User-reachable values go through `?`.
