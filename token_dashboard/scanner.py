@@ -445,6 +445,43 @@ def scan_roots(
                 (per_host_totals.get(host, 0), now_iso, host_secs, host),
             )
             conn.commit()
+    # Drift detection: any session whose messages are in the DB but has no
+    # row in summary_sessions needs to be re-rolled-up. This recovers from
+    # rebuild_summaries() failures that left messages committed but summary
+    # rows missing (e.g. an earlier "database is locked" during a concurrent
+    # write). Without this self-healing pass, a single transient failure
+    # would leave Recent Sessions stale forever.
+    DRIFT_FULL_REBUILD_THRESHOLD = 100
+    drift_days: set = set()
+    drift_sessions: set = set()
+    with connect(db_path) as conn:
+        drift_sessions = {
+            r[0] for r in conn.execute(
+                "SELECT m.session_id FROM messages m "
+                "LEFT JOIN summary_sessions s ON s.session_id = m.session_id "
+                "WHERE s.session_id IS NULL "
+                "GROUP BY m.session_id"
+            )
+        }
+        if drift_sessions and len(drift_sessions) <= DRIFT_FULL_REBUILD_THRESHOLD:
+            ph = ",".join("?" * len(drift_sessions))
+            drift_days = {
+                r[0] for r in conn.execute(
+                    f"SELECT DISTINCT substr(timestamp, 1, 10) FROM messages "
+                    f"WHERE session_id IN ({ph})",
+                    tuple(drift_sessions),
+                )
+            }
+    if drift_sessions and len(drift_sessions) > DRIFT_FULL_REBUILD_THRESHOLD:
+        # Large drift suggests prolonged rebuild failures. Targeted
+        # incremental with N>>thousand session-ids would hit SQLite's
+        # parameter limit and is slower than just rebuilding everything
+        # (full rebuild on ~1M messages completes in ~15s).
+        needs_full_summary_rebuild = True
+    else:
+        summary_days.update(drift_days)
+        summary_sessions.update(drift_sessions)
+
     summary_started = time.perf_counter()
     if needs_full_summary_rebuild:
         rebuild_summaries(db_path)
