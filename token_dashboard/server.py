@@ -29,7 +29,31 @@ from .skills import cached_catalog
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 PRICING_JSON = Path(__file__).resolve().parent.parent / "pricing.json"
 
-EVENTS: "queue.Queue[dict]" = queue.Queue()
+# SSE event fan-out. Every connected /api/stream client gets its own queue;
+# publish_event() pushes to all of them. A single global Queue would only
+# deliver each event to one waiting client (whichever .get() ran first),
+# so multi-tab setups would miss scan invalidations. Maxsize caps memory
+# if a client disconnects without unregistering — old events get dropped
+# rather than growing the queue unboundedly.
+_SSE_CLIENTS: "list[queue.Queue[dict]]" = []
+_SSE_CLIENTS_LOCK = threading.Lock()
+_SSE_QUEUE_MAX = 256
+
+
+def publish_event(evt: dict) -> None:
+    with _SSE_CLIENTS_LOCK:
+        clients = list(_SSE_CLIENTS)
+    for q in clients:
+        try:
+            q.put_nowait(evt)
+        except queue.Full:
+            # Slow client — drop oldest to make room rather than crash.
+            try:
+                q.get_nowait()
+                q.put_nowait(evt)
+            except (queue.Empty, queue.Full):
+                pass
+
 
 MAX_POST_BYTES = 1_000_000  # 1 MB — we only accept tiny JSON bodies (plan, tip key)
 MAX_LIMIT = 1000
@@ -96,14 +120,20 @@ _WARM_DEFAULT_DAYS = 30          # the range the UI lands on first
 def _do_refresh(db_path: str, projects_roots, pricing: dict) -> None:
     """One-shot scan + cache-clear + warm, used by the manual /api/refresh endpoint."""
     if not _SCAN_LOCK.acquire(blocking=False):
-        EVENTS.put({"type": "scan-skip", "reason": "already-running", "ts": time.time()})
+        publish_event({"type": "scan-skip", "reason": "already-running", "ts": time.time()})
         return
     try:
         n = scan_roots(projects_roots, db_path)
-        _cache_clear()
-        EVENTS.put({"type": "scan", "n": n, "ts": time.time()})
+        if n.get("messages", 0) > 0:
+            _cache_clear()
+            publish_event({"type": "scan", "n": n, "ts": time.time()})
+        else:
+            # No new content this tick — still publish so the UI clears
+            # the "scanning…" indicator and updates the scan-status pill
+            # without forcing a manual refresh.
+            publish_event({"type": "scan-complete", "n": n, "ts": time.time()})
     except Exception as e:
-        EVENTS.put({"type": "error", "message": str(e)})
+        publish_event({"type": "error", "message": str(e), "ts": time.time()})
     finally:
         _SCAN_LOCK.release()
 
@@ -326,16 +356,101 @@ def _serve_static(handler, rel: str) -> None:
 
 def build_handler(db_path: str, projects_roots):
     pricing = load_pricing(PRICING_JSON)
+    # Optional bearer-token auth. Set DASHBOARD_TOKEN in the environment to
+    # require a token on every request. Off by default to preserve existing
+    # behavior; opt-in for LAN exposure (HOST=0.0.0.0).
+    # Accepted in 3 forms, in priority order:
+    #   1. Authorization: Bearer <token>  (preferred for API clients)
+    #   2. ?token=<token>                 (sets the cookie + redirects to /)
+    #   3. Cookie: td_token=<token>       (set automatically by form #2)
+    auth_token = os.environ.get("DASHBOARD_TOKEN", "").strip() or None
+
+    def _check_auth(handler, path: str, query: str) -> bool:
+        """Return True if the request is authenticated (or auth is off).
+        On failure, writes a 401 (API) or redirect (browser) response and
+        returns False so the caller bails out."""
+        if not auth_token:
+            return True
+        # 1. Authorization header
+        auth_hdr = handler.headers.get("Authorization", "")
+        if auth_hdr.startswith("Bearer ") and auth_hdr[7:].strip() == auth_token:
+            return True
+        # 2. ?token=… in URL — sets cookie + redirects to clean URL
+        qs = parse_qs(query or "")
+        token_in_url = qs.get("token", [""])[0]
+        if token_in_url == auth_token:
+            # Redirect to same path, querystring with token stripped.
+            qs.pop("token", None)
+            stripped = "&".join(
+                f"{k}={v[0]}" for k, v in qs.items() if v
+            )
+            target = path + (("?" + stripped) if stripped else "")
+            handler.send_response(302)
+            handler.send_header(
+                "Set-Cookie",
+                f"td_token={auth_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000",
+            )
+            handler.send_header("Location", target)
+            handler.end_headers()
+            return False  # handler already replied
+        # 3. Cookie
+        cookie = handler.headers.get("Cookie", "")
+        for piece in cookie.split(";"):
+            k, _, v = piece.strip().partition("=")
+            if k == "td_token" and v == auth_token:
+                return True
+        # API endpoints get JSON 401; everything else gets a small login hint
+        if path.startswith("/api/"):
+            _send_error(handler, 401, "missing or invalid token")
+        else:
+            handler.send_response(401)
+            handler.send_header("Content-Type", "text/html; charset=utf-8")
+            handler.end_headers()
+            handler.wfile.write(
+                b"<h1>401 Unauthorized</h1>"
+                b"<p>Append <code>?token=YOUR_TOKEN</code> to the URL to sign in.</p>"
+            )
+        return False
 
     class H(http.server.BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             pass
 
         def do_HEAD(self):
-            return self.do_GET()
+            # HTTP spec: HEAD response must include identical headers to GET
+            # but no body. Delegate to do_GET with wfile swapped for a sink
+            # that lets header bytes through (everything before end_headers)
+            # and drops body bytes. Cheaper + more compliant than returning
+            # 405 — some clients legitimately use HEAD for liveness checks.
+            real_wfile = self.wfile
+            headers_done = [False]
+
+            class _HeaderOnlyWfile:
+                def write(self, data):
+                    if headers_done[0]:
+                        return len(data) if hasattr(data, "__len__") else 0
+                    return real_wfile.write(data)
+                def flush(self):
+                    return real_wfile.flush()
+
+            sink = _HeaderOnlyWfile()
+            orig_end_headers = self.end_headers
+            def _patched_end_headers():
+                orig_end_headers()
+                headers_done[0] = True
+
+            self.wfile = sink
+            self.end_headers = _patched_end_headers
+            try:
+                self.do_GET()
+            finally:
+                self.wfile = real_wfile
+                self.end_headers = orig_end_headers
 
         def do_GET(self):
             url = urlparse(self.path)
+            if not _check_auth(self, url.path, url.query):
+                return
             qs = parse_qs(url.query or "")
             path = url.path
             since = qs.get("since", [None])[0]
@@ -453,16 +568,15 @@ def build_handler(db_path: str, projects_roots):
             if path == "/api/plan":
                 return _send_json(self, {"plan": get_plan(db_path), "pricing": pricing})
             if path == "/api/scan":
-                # Acquire _SCAN_LOCK so this can't race the background _scan_loop
-                # or a concurrent /api/refresh — SQLite chokes ("database is
-                # locked") when two writers collide and aborts the scan mid-walk.
-                if not _SCAN_LOCK.acquire(blocking=False):
-                    return _send_json(self, {"skipped": "already-scanning"})
-                try:
-                    n = scan_roots(projects_roots, db_path)
-                finally:
-                    _SCAN_LOCK.release()
-                return _send_json(self, n)
+                # /api/scan is POST-only (write-heavy). GET returns 405 so
+                # accidental prefetchers / CDNs / browser GETs can't trigger
+                # a full scan unintentionally.
+                self.send_response(405)
+                self.send_header("Allow", "POST")
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"use POST"}')
+                return
             if path == "/api/scan/status":
                 # Lightweight — read scan_status table plus current lock
                 # state so the UI can render a "fresh / stale / scanning"
@@ -472,29 +586,54 @@ def build_handler(db_path: str, projects_roots):
                 data["is_scanning"] = _SCAN_LOCK.locked()
                 return _send_json(self, data)
             if path == "/api/rtk":
-                return _send_json(self, _rtk_payload())
+                # Cache the aggregated payload: each call subprocess-shells
+                # the rtk binary once per host. Repeated tab visits or SSE
+                # client reconnects can hammer that. TTL is the standard
+                # cache lifetime; cache is invalidated on scan events.
+                cached = _cache_get(cache_key)
+                if cached is not None:
+                    return _send_json(self, cached)
+                data = _rtk_payload()
+                _cache_set(cache_key, data)
+                return _send_json(self, data)
             if path == "/api/stream":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("Connection", "keep-alive")
                 self.end_headers()
-                while True:
-                    try:
-                        evt = EVENTS.get(timeout=15)
-                        chunk = f"data: {json.dumps(evt, default=str)}\n\n".encode()
-                    except queue.Empty:
-                        chunk = b": ping\n\n"
-                    try:
-                        self.wfile.write(chunk)
-                        self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
-                        return
+                # Register a per-connection queue so every connected tab
+                # receives every event. The previous shared queue meant
+                # whichever tab raced .get() first would consume the event;
+                # other tabs would miss the scan invalidation.
+                client_q: "queue.Queue[dict]" = queue.Queue(maxsize=_SSE_QUEUE_MAX)
+                with _SSE_CLIENTS_LOCK:
+                    _SSE_CLIENTS.append(client_q)
+                try:
+                    while True:
+                        try:
+                            evt = client_q.get(timeout=15)
+                            chunk = f"data: {json.dumps(evt, default=str)}\n\n".encode()
+                        except queue.Empty:
+                            chunk = b": ping\n\n"
+                        try:
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError):
+                            return
+                finally:
+                    with _SSE_CLIENTS_LOCK:
+                        try:
+                            _SSE_CLIENTS.remove(client_q)
+                        except ValueError:
+                            pass
             self.send_response(404)
             self.end_headers()
 
         def do_POST(self):
             url = urlparse(self.path)
+            if not _check_auth(self, url.path, url.query):
+                return
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
@@ -516,10 +655,35 @@ def build_handler(db_path: str, projects_roots):
                     _cache_clear()
                     return _send_json(self, {"ok": True})
                 if url.path == "/api/refresh":
+                    # Coalesce: if a scan is already running, don't spawn
+                    # another thread — return early. The currently-running
+                    # scan's completion event will reach this client via
+                    # SSE just the same. Prevents thread churn under a
+                    # flood of refresh clicks or accidental cron loops.
+                    if _SCAN_LOCK.locked():
+                        return _send_json(self, {"ok": True, "skipped": "already-scanning"})
                     threading.Thread(
                         target=_do_refresh, args=(db_path, projects_roots, pricing), daemon=True
                     ).start()
                     return _send_json(self, {"ok": True})
+                if url.path == "/api/scan":
+                    # POST-only version of /api/scan: run a scan synchronously,
+                    # clear cache, emit completion event, return counts. The
+                    # old GET form is gone — write-heavy endpoints should be
+                    # POST so caches/CDNs/prefetchers don't accidentally
+                    # trigger them.
+                    if not _SCAN_LOCK.acquire(blocking=False):
+                        return _send_json(self, {"skipped": "already-scanning"})
+                    try:
+                        n = scan_roots(projects_roots, db_path)
+                    finally:
+                        _SCAN_LOCK.release()
+                    if n.get("messages", 0) > 0:
+                        _cache_clear()
+                        publish_event({"type": "scan", "n": n, "ts": time.time()})
+                    else:
+                        publish_event({"type": "scan-complete", "n": n, "ts": time.time()})
+                    return _send_json(self, n)
             except Exception as e:
                 return _send_error(self, 503, str(e))
             self.send_response(404)
@@ -537,13 +701,18 @@ def _scan_loop(db_path: str, projects_roots, pricing: dict, interval: float = 60
             if _SCAN_LOCK.acquire(blocking=False):
                 try:
                     n = scan_roots(projects_roots, db_path)
-                    if n["messages"] > 0:
+                    if n.get("messages", 0) > 0:
                         _cache_clear()
-                        EVENTS.put({"type": "scan", "n": n, "ts": time.time()})
+                        publish_event({"type": "scan", "n": n, "ts": time.time()})
+                    else:
+                        # Always publish a completion event even on zero-change
+                        # scans — the UI's _scanning flag was getting stuck on
+                        # idle scans because nothing told it the tick finished.
+                        publish_event({"type": "scan-complete", "n": n, "ts": time.time()})
                 finally:
                     _SCAN_LOCK.release()
         except Exception as e:
-            EVENTS.put({"type": "error", "message": str(e)})
+            publish_event({"type": "error", "message": str(e), "ts": time.time()})
         time.sleep(interval)
 
 

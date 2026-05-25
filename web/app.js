@@ -349,12 +349,19 @@ async function boot() {
     es.onmessage = ev => {
       try {
         const evt = JSON.parse(ev.data);
-        if (evt.type === 'scan') {
-          cacheClear();
+        // Any terminal scan signal (new data, completed idle scan, skip,
+        // or error) clears the scanning indicator. Without scan-complete
+        // handling, idle ticks left the refresh button stuck on '↻ …'.
+        if (evt.type === 'scan' || evt.type === 'scan-complete' ||
+            evt.type === 'scan-skip' || evt.type === 'error') {
           _nextScanAt = Date.now() + SCAN_INTERVAL;
+          setScanning(false);
+          updateScanStatus();
+        }
+        if (evt.type === 'scan') {
+          // Only new-data scans invalidate caches + raise the new-data flag.
+          cacheClear();
           _hasNewData = true;
-          setScanning(false); // clears spinner; updateRefreshBtn() shows "new data"
-          updateScanStatus(); // refresh pill immediately after a scan
         }
       } catch {}
     };

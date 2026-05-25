@@ -427,12 +427,16 @@ def scan_roots(
                 (per_host_totals.get(host, 0), now_iso, host_secs, host),
             )
             conn.commit()
-    # Drift detection: any session whose messages are in the DB but has no
-    # row in summary_sessions needs to be re-rolled-up. This recovers from
-    # rebuild_summaries() failures that left messages committed but summary
-    # rows missing (e.g. an earlier "database is locked" during a concurrent
-    # write). Without this self-healing pass, a single transient failure
-    # would leave Recent Sessions stale forever.
+    # Drift detection: catches sessions whose `summary_sessions` row is
+    # either MISSING (rebuild never ran) or STALE (rebuild ran but for an
+    # older snapshot of the same session_id — a transient lock during the
+    # rebuild's INSERT…SELECT can leave the existing row intact but with
+    # outdated tokens/turns/ended). Both modes are recovered the same way:
+    # include the drifted session_ids in the next rebuild's set.
+    #
+    # The HAVING clause covers both:
+    #   - s.session_id IS NULL          → missing row
+    #   - MAX(m.timestamp) != s.ended   → stale row (newer messages exist)
     DRIFT_FULL_REBUILD_THRESHOLD = 100
     drift_days: set = set()
     drift_sessions: set = set()
@@ -441,8 +445,8 @@ def scan_roots(
             r[0] for r in conn.execute(
                 "SELECT m.session_id FROM messages m "
                 "LEFT JOIN summary_sessions s ON s.session_id = m.session_id "
-                "WHERE s.session_id IS NULL "
-                "GROUP BY m.session_id"
+                "GROUP BY m.session_id "
+                "HAVING s.session_id IS NULL OR MAX(m.timestamp) != s.ended"
             )
         }
         if drift_sessions and len(drift_sessions) <= DRIFT_FULL_REBUILD_THRESHOLD:

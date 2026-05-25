@@ -20,13 +20,33 @@ def _db_path(args) -> str:
 def _parse_projects_dirs(spec: str) -> List[Tuple[str, str]]:
     """Parse CLAUDE_PROJECTS_DIRS into [(host, path), ...].
 
-    Format: ``host1=/path/one:host2=/path/two``. Colon-separated pairs;
-    each pair is ``host=path``. A bare path (no `=`) is treated as
-    ``jstation=<path>`` so a misconfigured deployment never silently
-    drops data into the wrong host attribution.
+    Preferred form: newline-separated ``host=path`` pairs (one per line),
+    which removes any ambiguity about what character splits entries.
+    Back-compat: colon-separated form ``host1=/a:host2=/b`` is also
+    accepted. To support paths containing ``:`` in the colon form, a
+    token without ``=`` is treated as a continuation of the previous
+    entry's path — so ``jlap=/srv/foo:bar:jstation=/cache`` parses as
+    ``jlap=/srv/foo:bar`` + ``jstation=/cache``.
+
+    A bare path with no ``=`` anywhere defaults to host=jstation so a
+    misconfigured deployment never silently drops data with the wrong
+    attribution.
     """
     out: List[Tuple[str, str]] = []
-    for entry in spec.split(":"):
+    # Newline takes precedence over colon when present.
+    if "\n" in spec:
+        tokens = [t for t in spec.splitlines() if t.strip()]
+    else:
+        # Re-stitch colon-split tokens that didn't carry their own host:
+        # those are path fragments belonging to the previous entry.
+        raw = [t for t in spec.split(":") if t.strip()]
+        tokens = []
+        for t in raw:
+            if "=" in t or not tokens:
+                tokens.append(t)
+            else:
+                tokens[-1] = tokens[-1] + ":" + t
+    for entry in tokens:
         entry = entry.strip()
         if not entry:
             continue

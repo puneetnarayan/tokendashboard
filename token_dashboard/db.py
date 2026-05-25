@@ -177,10 +177,20 @@ def scan_status(db_path) -> dict:
         hosts = []
         for r in rows:
             root = (r["root_path"] or "").rstrip("/")
-            ingested = c.execute(
-                "SELECT COUNT(*) FROM files WHERE path LIKE ?",
-                (root + "/%",),
-            ).fetchone()[0] if root else 0
+            # Range comparison instead of LIKE so `%` and `_` inside a
+            # path (rare on Unix but legal) don't act as SQL wildcards.
+            # The upper bound is the prefix followed by U+10FFFF (the
+            # largest valid Unicode code point) — guarantees inclusion
+            # of every path that starts with the prefix.
+            if root:
+                lo = root + "/"
+                hi = root + "/\U0010FFFF"
+                ingested = c.execute(
+                    "SELECT COUNT(*) FROM files WHERE path >= ? AND path < ?",
+                    (lo, hi),
+                ).fetchone()[0]
+            else:
+                ingested = 0
             total = r["files_total"] or 0
             pct = round(100 * ingested / total) if total else 0
             hosts.append({
