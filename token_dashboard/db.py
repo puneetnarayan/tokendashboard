@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS messages (
   cache_create_1h_tokens  INTEGER NOT NULL DEFAULT 0,
   prompt_text             TEXT,
   prompt_chars            INTEGER,
-  tool_calls_json         TEXT
+  tool_calls_json         TEXT,
+  attribution_skill       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session   ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_project   ON messages(project_slug);
@@ -84,6 +85,7 @@ def init_db(path: Union[str, Path]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as c:
         _migrate_add_message_id(c)
+        _migrate_add_attribution_skill(c)
         c.executescript(SCHEMA)
 
 
@@ -104,6 +106,30 @@ def _migrate_add_message_id(conn) -> None:
     if "message_id" in cols:
         return
     conn.execute("ALTER TABLE messages ADD COLUMN message_id TEXT")
+    conn.execute("DELETE FROM messages")
+    conn.execute("DELETE FROM tool_calls")
+    conn.execute("DELETE FROM files")
+    conn.commit()
+
+
+def _migrate_add_attribution_skill(conn) -> None:
+    """Add messages.attribution_skill to track slash-command invocations.
+
+    Why: attributionSkill in JSONL records shows which slash command (or skill)
+    was active for a message, but was never stored. Without it the skills view
+    only counts explicit Skill tool calls and misses all /command invocations.
+    How to apply: clears messages/tool_calls/files so the next scan replays
+    all JSONLs and populates the new column for every row.
+    """
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'"
+    ).fetchone()
+    if not has_table:
+        return
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "attribution_skill" in cols:
+        return
+    conn.execute("ALTER TABLE messages ADD COLUMN attribution_skill TEXT")
     conn.execute("DELETE FROM messages")
     conn.execute("DELETE FROM tool_calls")
     conn.execute("DELETE FROM files")
@@ -331,29 +357,57 @@ def daily_token_breakdown(db_path, since=None, until=None) -> list:
 
 
 def skill_breakdown(db_path, since=None, until=None) -> list:
-    """Per-skill invocation counts, distinct sessions, last-used timestamp.
+    """Per-skill invocation counts split into two types:
 
-    Token attribution per skill is not included: in Claude Code, a Skill's
-    content is loaded via a system-reminder on the next turn, not as the
-    tool_result body — so `result_tokens` on _tool_result rows reflects the
-    activation ack (tiny), not the skill definition (which is what actually
-    fills context). A future schema change (storing tool_use_id on the
-    invocation row) could enable precise attribution; for now we only expose
-    the reliable counts.
+    - manual_sessions: distinct sessions where the user ran /command-name,
+      tracked via the attributionSkill field on messages.
+    - tool_invocations: times Claude explicitly called the Skill tool
+      mid-conversation, tracked via tool_calls rows.
+
+    Both are merged into a single row per skill, ordered by combined total.
     """
-    rng, args = _range_clause(since, until)
+    rng_tc, args_tc = _range_clause(since, until)
+    rng_ms, args_ms = _range_clause(since, until)
+    # Simulate FULL OUTER JOIN via UNION (FULL OUTER JOIN requires SQLite ≥ 3.39).
     sql = f"""
-      SELECT target AS skill,
-             COUNT(*) AS invocations,
-             COUNT(DISTINCT session_id) AS sessions,
-             MAX(timestamp) AS last_used
-        FROM tool_calls
-       WHERE tool_name = 'Skill' AND target IS NOT NULL AND target != '' {rng}
-       GROUP BY target
-       ORDER BY invocations DESC
+      WITH tool_inv AS (
+        SELECT target AS skill,
+               COUNT(*) AS tool_invocations,
+               MAX(timestamp) AS last_used_tool
+          FROM tool_calls tc
+         WHERE tool_name = 'Skill' AND target IS NOT NULL AND target != '' {rng_tc}
+           AND EXISTS (SELECT 1 FROM messages m
+                       WHERE m.uuid = tc.message_uuid AND m.type = 'assistant')
+         GROUP BY target
+      ),
+      manual_inv AS (
+        SELECT attribution_skill AS skill,
+               COUNT(DISTINCT session_id) AS manual_sessions,
+               MAX(timestamp) AS last_used_manual
+          FROM messages
+         WHERE attribution_skill IS NOT NULL AND attribution_skill != '' {rng_ms}
+         GROUP BY attribution_skill
+      )
+      SELECT skill, manual_sessions, tool_invocations, last_used FROM (
+        SELECT
+          COALESCE(t.skill, m.skill) AS skill,
+          COALESCE(m.manual_sessions, 0)   AS manual_sessions,
+          COALESCE(t.tool_invocations, 0)  AS tool_invocations,
+          MAX(COALESCE(t.last_used_tool, ''), COALESCE(m.last_used_manual, '')) AS last_used
+        FROM tool_inv t LEFT JOIN manual_inv m ON t.skill = m.skill
+        UNION
+        SELECT
+          m.skill,
+          m.manual_sessions,
+          0,
+          m.last_used_manual
+        FROM manual_inv m LEFT JOIN tool_inv t ON m.skill = t.skill
+        WHERE t.skill IS NULL
+      )
+      ORDER BY (manual_sessions + tool_invocations) DESC
     """
     with connect(db_path) as c:
-        return [dict(r) for r in c.execute(sql, args)]
+        return [dict(r) for r in c.execute(sql, args_tc + args_ms)]
 
 
 def model_breakdown(db_path, since=None, until=None) -> list:

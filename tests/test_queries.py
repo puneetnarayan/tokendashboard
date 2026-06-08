@@ -102,12 +102,22 @@ class SkillBreakdownTests(unittest.TestCase):
         init_db(self.db)
         with connect(self.db) as c:
             c.executescript("""
-            INSERT INTO messages (uuid, session_id, project_slug, type, timestamp)
+            INSERT INTO messages (uuid, session_id, project_slug, type, timestamp, attribution_skill)
             VALUES
-              ('u1','s1','pA','user','2026-04-10T00:00:00Z'),
-              ('a1','s1','pA','assistant','2026-04-10T00:00:01Z'),
-              ('u2','s2','pA','user','2026-04-11T00:00:00Z'),
-              ('a2','s2','pA','assistant','2026-04-11T00:00:01Z');
+              ('u1','s1','pA','user','2026-04-10T00:00:00Z',NULL),
+              ('a1','s1','pA','assistant','2026-04-10T00:00:01Z',NULL),
+              ('u2','s2','pA','user','2026-04-11T00:00:00Z',NULL),
+              ('a2','s2','pA','assistant','2026-04-11T00:00:01Z',NULL),
+              -- manual /command invocations: 'polish-email' in two distinct sessions,
+              -- 'name-conversation' in one. Multiple rows per session must collapse
+              -- to a single manual_session count via COUNT(DISTINCT session_id).
+              ('u3','s3','pA','user','2026-04-12T00:00:00Z','polish-email'),
+              ('a3','s3','pA','assistant','2026-04-12T00:00:01Z','polish-email'),
+              ('u4','s4','pA','user','2026-04-13T00:00:00Z','polish-email'),
+              ('u5','s5','pA','user','2026-04-14T00:00:00Z','name-conversation'),
+              -- 'brainstorming' also gets a manual session, to verify the COALESCE
+              -- merge of a skill that has BOTH tool invocations and manual sessions.
+              ('u6','s6','pA','user','2026-04-15T00:00:00Z','brainstorming');
 
             INSERT INTO tool_calls (message_uuid, session_id, project_slug, tool_name, target, result_tokens, timestamp, is_error)
             VALUES
@@ -123,18 +133,46 @@ class SkillBreakdownTests(unittest.TestCase):
     def test_groups_by_skill(self):
         rows = skill_breakdown(self.db)
         by_name = {r["skill"]: r for r in rows}
-        self.assertEqual(by_name["brainstorming"]["invocations"], 2)
-        self.assertEqual(by_name["brainstorming"]["sessions"], 1)
-        self.assertEqual(by_name["create-skill"]["invocations"], 1)
+        # brainstorming: both tool invocations AND a manual session — exercises
+        # the COALESCE merge branch of the UNION.
+        self.assertEqual(by_name["brainstorming"]["tool_invocations"], 2)
+        self.assertEqual(by_name["brainstorming"]["manual_sessions"], 1)
+        self.assertEqual(by_name["create-skill"]["tool_invocations"], 1)
+        self.assertEqual(by_name["create-skill"]["manual_sessions"], 0)
 
-    def test_orders_by_invocations(self):
+    def test_manual_only_skill_appears(self):
+        # name-conversation has no Skill tool calls — only an attribution_skill
+        # entry. This exercises the second UNION arm (manual_inv LEFT JOIN
+        # tool_inv WHERE t.skill IS NULL).
         rows = skill_breakdown(self.db)
-        self.assertEqual(rows[0]["skill"], "brainstorming")
+        by_name = {r["skill"]: r for r in rows}
+        self.assertIn("name-conversation", by_name)
+        self.assertEqual(by_name["name-conversation"]["manual_sessions"], 1)
+        self.assertEqual(by_name["name-conversation"]["tool_invocations"], 0)
+
+    def test_manual_sessions_distinct(self):
+        # polish-email has three attribution rows across two distinct sessions
+        # (s3 has two rows, s4 has one) — must collapse to 2 via DISTINCT.
+        rows = skill_breakdown(self.db)
+        by_name = {r["skill"]: r for r in rows}
+        self.assertEqual(by_name["polish-email"]["manual_sessions"], 2)
+        self.assertEqual(by_name["polish-email"]["tool_invocations"], 0)
+
+    def test_orders_by_combined_total(self):
+        # brainstorming (2 tool + 1 manual = 3) ranks above polish-email
+        # (0 tool + 2 manual = 2), proving ordering uses the sum, not just one.
+        rows = skill_breakdown(self.db)
+        names = [r["skill"] for r in rows]
+        self.assertEqual(names[0], "brainstorming")
+        self.assertLess(names.index("brainstorming"), names.index("polish-email"))
 
     def test_respects_since(self):
-        rows = skill_breakdown(self.db, since="2026-04-11T00:00:00Z")
-        names = [r["skill"] for r in rows]
-        self.assertEqual(names, ["create-skill"])
+        rows = skill_breakdown(self.db, since="2026-04-12T00:00:00Z")
+        names = {r["skill"] for r in rows}
+        # 2026-04-10 brainstorming tool calls and 2026-04-11 create-skill drop out.
+        self.assertNotIn("create-skill", names)
+        self.assertIn("polish-email", names)
+        self.assertIn("name-conversation", names)
 
 
 class ProjectNameTests(unittest.TestCase):
