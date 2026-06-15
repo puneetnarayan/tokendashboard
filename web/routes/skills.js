@@ -1,4 +1,4 @@
-import { api, fmt } from '/web/app.js';
+import { api, fmt, t } from '/web/app.js';
 import { barChart } from '/web/charts.js';
 
 const RANGES = [
@@ -36,37 +36,37 @@ export default async function (root) {
 
   const rangeTabs = `
     <div class="range-tabs" role="tablist">
-      ${RANGES.map(r => `<button data-range="${r.key}" class="${r.key === range.key ? 'active' : ''}">${r.label}</button>`).join('')}
+      ${RANGES.map(r => `<button data-range="${r.key}" class="${r.key === range.key ? 'active' : ''}">${r.key === 'all' ? t('range_all') : r.key}</button>`).join('')}
     </div>`;
 
   root.innerHTML = `
     <div class="flex" style="margin-bottom:14px">
-      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">Skills</h2>
-      <span class="muted" style="font-size:12px">${range.days ? `last ${range.days} days` : 'all time'}</span>
+      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">${t('sk_title')}</h2>
+      <span class="muted" style="font-size:12px">${range.days ? t('ov_last_days').replace('{d}', range.days) : t('ov_all_time')}</span>
       <div class="spacer"></div>
       ${rangeTabs}
     </div>
 
     <div class="row cols-2">
-      <div class="card kpi"><div class="label">Unique skills used</div><div class="value">${fmt.int(skills.length)}</div></div>
-      <div class="card kpi"><div class="label">Total invocations</div><div class="value">${fmt.int(totalInvocations)}</div></div>
+      <div class="card kpi"><div class="label">${t('sk_unique')}</div><div class="value">${fmt.int(skills.length)}</div></div>
+      <div class="card kpi"><div class="label">${t('sk_total')}</div><div class="value">${fmt.int(totalInvocations)}</div></div>
     </div>
 
     <div class="card" style="margin-top:16px">
-      <h3>Top skills (by invocations)</h3>
+      <h3>${t('sk_top')}</h3>
       <div id="ch-skills" style="height:320px"></div>
     </div>
 
     <div class="card" style="margin-top:16px">
-      <h3>All skills</h3>
-      <p class="muted" style="margin:-4px 0 14px;font-size:12px">"Tokens per call" is the size of the skill's <code>SKILL.md</code> file — what Claude Code loads into context each time the skill is invoked.</p>
+      <h3>${t('sk_all')}</h3>
+      <p class="muted" style="margin:-4px 0 14px;font-size:12px">${t('sk_sub')}</p>
       <table>
         <thead><tr>
-          <th>skill</th>
-          <th class="num">invocations</th>
-          <th class="num">tokens per call</th>
-          <th class="num">sessions</th>
-          <th>last used</th>
+          <th>${t('sk_col_skill')}</th>
+          <th class="num">${t('sk_col_inv')}</th>
+          <th class="num">${t('sk_col_tpc')}</th>
+          <th class="num">${t('sk_col_sess')}</th>
+          <th>${t('sk_col_last')}</th>
         </tr></thead>
         <tbody>
           ${skills.map(s => `
@@ -76,7 +76,7 @@ export default async function (root) {
               <td class="num">${s.tokens_per_call == null ? '<span class="muted">—</span>' : fmt.int(s.tokens_per_call)}</td>
               <td class="num">${fmt.int(s.sessions)}</td>
               <td class="mono">${fmt.ts(s.last_used)}</td>
-            </tr>`).join('') || '<tr><td colspan="5" class="muted">no skills invoked in this range</td></tr>'}
+            </tr>`).join('') || `<tr><td colspan="5" class="muted">${t('sk_no')}</td></tr>`}
         </tbody>
       </table>
     </div>

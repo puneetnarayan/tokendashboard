@@ -1,9 +1,6 @@
-import { api, fmt } from '/web/app.js';
+import { api, fmt, t } from '/web/app.js';
 
-const SORTS = [
-  { key: 'tokens', label: 'Most tokens' },
-  { key: 'recent', label: 'Most recent' },
-];
+const SORTS = [{ key: 'tokens' }, { key: 'recent' }];
 
 function readSort() {
   const q = (location.hash.split('?')[1] || '');
@@ -23,16 +20,14 @@ export default async function (root) {
 
   const sortTabs = `
     <div class="range-tabs" role="tablist">
-      ${SORTS.map(s => `<button data-sort="${s.key}" class="${s.key === sort.key ? 'active' : ''}">${s.label}</button>`).join('')}
+      ${SORTS.map(s => `<button data-sort="${s.key}" class="${s.key === sort.key ? 'active' : ''}">${t('sort_' + s.key)}</button>`).join('')}
     </div>`;
 
-  const subtitle = sort.key === 'recent'
-    ? 'Your latest prompts and the assistant turn each one triggered. Click a row to see the full prompt.'
-    : 'The prompts that cost the most tokens. Click a row to see the full prompt.';
+  const subtitle = sort.key === 'recent' ? t('pr_sub_recent') : t('pr_sub_tokens');
 
   root.innerHTML = `
     <div class="flex" style="margin-bottom:14px">
-      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">Prompts</h2>
+      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">${t('pr_title')}</h2>
       <div class="spacer"></div>
       ${sortTabs}
     </div>
@@ -41,12 +36,12 @@ export default async function (root) {
       <p class="muted" style="margin:0 0 14px">${subtitle}</p>
       <table id="prompts">
         <thead><tr>
-          <th>${sort.key === 'recent' ? 'when' : 'cache cost'}</th>
-          <th>prompt</th>
-          <th>model</th>
-          <th class="num">tokens</th>
-          <th class="num">cache rd</th>
-          <th>session</th>
+          <th>${sort.key === 'recent' ? t('pr_col_when') : t('pr_col_cost')}</th>
+          <th>${t('pr_col_prompt')}</th>
+          <th>${t('pr_col_model')}</th>
+          <th class="num">${t('pr_col_tokens')}</th>
+          <th class="num">${t('pr_col_crd')}</th>
+          <th>${t('pr_col_session')}</th>
         </tr></thead>
         <tbody>
           ${rows.map((r,i) => `
@@ -57,7 +52,7 @@ export default async function (root) {
               <td class="num">${fmt.int(r.billable_tokens)}</td>
               <td class="num">${fmt.int(r.cache_read_tokens)}</td>
               <td><a href="#/sessions/${encodeURIComponent(r.session_id)}" class="mono" onclick="event.stopPropagation()">${fmt.htmlSafe(r.session_id.slice(0,8))}…</a></td>
-            </tr>`).join('') || '<tr><td colspan="6" class="muted">no prompts yet</td></tr>'}
+            </tr>`).join('') || `<tr><td colspan="6" class="muted">${t('pr_no_prompts')}</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -75,16 +70,16 @@ export default async function (root) {
       drawer.innerHTML = `
         <div class="card">
           <h3 style="display:flex;align-items:center">
-            <span>Prompt detail</span>
+            <span>${t('pr_detail')}</span>
             <span class="spacer"></span>
             <span class="badge ${fmt.modelClass(r.model)}">${fmt.htmlSafe(fmt.modelShort(r.model))}</span>
           </h3>
           <pre class="blur-sensitive">${fmt.htmlSafe(r.prompt_text || '')}</pre>
           <div class="flex" style="margin-top:12px;flex-wrap:wrap;gap:14px">
             <span class="muted">${fmt.ts(r.timestamp)}</span>
-            <span class="muted">${fmt.int(r.billable_tokens)} billable · ${fmt.int(r.cache_read_tokens)} cache rd · ~${fmt.usd4(r.estimated_cost_usd)} cache cost</span>
+            <span class="muted">${fmt.int(r.billable_tokens)} ${t('pr_billable')} · ${fmt.int(r.cache_read_tokens)} ${t('pr_crd')} · ~${fmt.usd4(r.estimated_cost_usd)} ${t('pr_ccost')}</span>
             <span class="spacer"></span>
-            <a href="#/sessions/${encodeURIComponent(r.session_id)}">Open session →</a>
+            <a href="#/sessions/${encodeURIComponent(r.session_id)}">${t('pr_open')}</a>
           </div>
         </div>`;
       drawer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });

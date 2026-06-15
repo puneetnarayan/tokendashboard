@@ -1,27 +1,27 @@
-import { api, state, $ } from '/web/app.js';
+import { api, state, $, t } from '/web/app.js';
 
 export default async function (root) {
   const cur = await api('/api/plan');
   const plans = Object.entries(cur.pricing.plans);
   root.innerHTML = `
     <div class="card">
-      <h2>Settings</h2>
-      <h3 style="margin-top:16px">Plan</h3>
-      <p class="muted" style="margin:0 0 12px">Sets how cost is displayed. API mode shows pay-per-token rates. Subscription modes show what you actually pay each month.</p>
+      <h2>${t('st_title')}</h2>
+      <h3 style="margin-top:16px">${t('st_plan')}</h3>
+      <p class="muted" style="margin:0 0 12px">${t('st_plan_sub')}</p>
       <div class="flex">
         <select id="plan">
           ${plans.map(([k,v]) => `<option value="${k}" ${k===cur.plan?'selected':''}>${v.label}${v.monthly?` — $${v.monthly}/mo`:''}</option>`).join('')}
         </select>
-        <button class="primary" id="save">Save</button>
+        <button class="primary" id="save">${t('st_save')}</button>
         <span id="msg" class="muted"></span>
       </div>
 
       <hr class="divider">
 
-      <h3>Pricing table</h3>
-      <p class="muted" style="margin:0 0 12px">Edit <code>pricing.json</code> in the project root to change rates. Reload the page after editing.</p>
+      <h3>${t('st_pricing')}</h3>
+      <p class="muted" style="margin:0 0 12px">${t('st_pricing_sub')}</p>
       <table>
-        <thead><tr><th>model</th><th class="num">input</th><th class="num">output</th><th class="num">cache read</th><th class="num">cache 5m</th><th class="num">cache 1h</th></tr></thead>
+        <thead><tr><th>${t('st_col_model')}</th><th class="num">${t('st_col_in')}</th><th class="num">${t('st_col_out')}</th><th class="num">${t('st_col_cr')}</th><th class="num">${t('st_col_c5m')}</th><th class="num">${t('st_col_c1h')}</th></tr></thead>
         <tbody>
           ${Object.entries(cur.pricing.models).map(([k,v]) => `
             <tr><td><span class="badge ${v.tier}">${k}</span></td>
@@ -33,12 +33,12 @@ export default async function (root) {
             </tr>`).join('')}
         </tbody>
       </table>
-      <p class="muted" style="margin-top:8px;font-size:11px">Rates per 1M tokens, USD.</p>
+      <p class="muted" style="margin-top:8px;font-size:11px">${t('st_rates')}</p>
 
       <hr class="divider">
 
-      <h3>Privacy</h3>
-      <p class="muted">Press <code>Cmd/Ctrl + B</code> anywhere to blur prompt text and other sensitive content for screenshots.</p>
+      <h3>${t('st_privacy')}</h3>
+      <p class="muted">${t('st_privacy_body')}</p>
     </div>`;
 
   $('#save').addEventListener('click', async () => {
@@ -46,7 +46,7 @@ export default async function (root) {
     await fetch('/api/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }) });
     state.plan = plan;
     document.getElementById('plan-pill').textContent = plan;
-    $('#msg').textContent = 'Saved.';
+    $('#msg').textContent = t('st_saved');
     $('#msg').style.color = 'var(--good)';
   });
 }

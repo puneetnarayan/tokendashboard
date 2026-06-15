@@ -1,5 +1,8 @@
 // app.js — router, state, fetch helpers
 
+import { t, getLocale, setLocale } from '/web/i18n.js';
+export { t };
+
 export const $  = (sel, root=document) => root.querySelector(sel);
 export const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
@@ -47,13 +50,18 @@ function buildTopbar() {
   wrap.innerHTML = `
     <div class="brand">Token Dashboard</div>
     <nav>
-      ${Object.keys(ROUTES).map(p => `<a href="#${p}" data-route="${p}">${p.slice(1)}</a>`).join('')}
+      ${Object.keys(ROUTES).map(p => `<a href="#${p}" data-route="${p}">${t('nav_' + p.slice(1))}</a>`).join('')}
     </nav>
     <div class="spacer"></div>
+    <button id="lang-btn" class="pill lang-btn" title="Change language / Mudar idioma">${getLocale() === 'pt' ? 'PT-BR' : 'EN'}</button>
     <span class="pill" id="plan-pill">api</span>
-    <span class="pill muted" title="Cmd/Ctrl+B blurs sensitive text">⌘B blur</span>
+    <span class="pill muted" title="Cmd/Ctrl+B">${t('blur_hint')}</span>
   `;
   document.body.prepend(wrap);
+  wrap.querySelector('#lang-btn').addEventListener('click', () => {
+    setLocale(getLocale() === 'en' ? 'pt' : 'en');
+    location.reload();
+  });
 }
 
 function setActiveTab(routeKey) {
@@ -83,14 +91,14 @@ async function firstRun() {
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal">
-      <h2>Welcome — pick your plan</h2>
-      <p>This sets how costs are displayed. Change it later in Settings.</p>
+      <h2>${t('wl_title')}</h2>
+      <p>${t('wl_sub')}</p>
       <select id="firstplan" style="width:100%">
         ${plans.map(([k,v]) => `<option value="${k}">${v.label}${v.monthly ? ` — $${v.monthly}/mo` : ''}</option>`).join('')}
       </select>
       <div class="actions">
         <div class="spacer"></div>
-        <button class="primary" id="firstsave">Continue</button>
+        <button class="primary" id="firstsave">${t('wl_continue')}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);

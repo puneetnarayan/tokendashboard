@@ -99,6 +99,12 @@ The dashboard is a single page with a hash-router tab bar across the top. Each t
 
 The Overview tab also has a built-in "What do these numbers mean?" panel that explains input/output/cache tokens in plain English.
 
+## Language / Idioma
+
+The UI supports **English** and **Portuguese (Brazil)**. Click the **EN** / **PT-BR** button in the top bar to switch languages. The preference is saved in the browser and persists across sessions.
+
+> A interface suporta **inglês** e **português (Brasil)**. Clique no botão **EN** / **PT-BR** na barra superior para alternar o idioma. A preferência é salva no navegador.
+
 ## Troubleshooting
 
 **"No data" or empty charts.** Run `python3 cli.py scan` once to populate the DB, then reload.

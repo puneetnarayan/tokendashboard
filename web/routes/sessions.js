@@ -1,4 +1,4 @@
-import { api, fmt } from '/web/app.js';
+import { api, fmt, t } from '/web/app.js';
 
 export default async function (root) {
   const id = decodeURIComponent(location.hash.split('/')[2] || '');
@@ -10,9 +10,9 @@ async function renderList(root) {
   const list = await api('/api/sessions?limit=100');
   root.innerHTML = `
     <div class="card">
-      <h2>Sessions</h2>
+      <h2>${t('se_title')}</h2>
       <table>
-        <thead><tr><th>started</th><th>project</th><th class="num">turns</th><th class="num">tokens</th><th>session</th></tr></thead>
+        <thead><tr><th>${t('se_col_started')}</th><th>${t('se_col_project')}</th><th class="num">${t('se_col_turns')}</th><th class="num">${t('se_col_tokens')}</th><th>${t('se_col_session')}</th></tr></thead>
         <tbody>
           ${list.map(s => `
             <tr>
@@ -51,20 +51,20 @@ async function renderSession(root, id) {
       <h2 style="display:flex;align-items:center">
         <span>Session ${fmt.htmlSafe(id.slice(0,8))}…</span>
         <span class="spacer"></span>
-        <a href="#/sessions" class="muted">← all sessions</a>
+        <a href="#/sessions" class="muted">${t('se_all')}</a>
       </h2>
       <div class="flex muted" style="font-family:var(--mono);font-size:12px;flex-wrap:wrap;gap:14px">
         <span>${fmt.htmlSafe(project)}</span>
         <span>${fmt.ts(started)} → ${fmt.ts(ended)}</span>
-        <span>${turns.length} records</span>
-        <span>${fmt.int(totalIn)} in · ${fmt.int(totalOut)} out · ${fmt.int(totalCacheRd)} cache rd</span>
+        <span>${turns.length} ${t('se_records')}</span>
+        <span>${fmt.int(totalIn)} ${t('se_in')} · ${fmt.int(totalOut)} ${t('se_out')} · ${fmt.int(totalCacheRd)} ${t('se_crd')}</span>
       </div>
     </div>
 
     <div class="card" style="margin-top:16px">
-      <h3>Turn-by-turn</h3>
+      <h3>${t('se_tbt')}</h3>
       <table>
-        <thead><tr><th>time</th><th>type</th><th>model</th><th class="blur-sensitive">prompt / tools</th><th class="num">in</th><th class="num">out</th><th class="num">cache rd</th></tr></thead>
+        <thead><tr><th>${t('se_col_time')}</th><th>${t('se_col_type')}</th><th>${t('se_col_model')??'model'}</th><th class="blur-sensitive">${t('se_col_pt')}</th><th class="num">${t('se_col_in')}</th><th class="num">${t('se_col_out')}</th><th class="num">${t('se_col_crd')}</th></tr></thead>
         <tbody>
           ${turns.map(t => {
             const tools = t.tool_calls_json ? JSON.parse(t.tool_calls_json) : [];
