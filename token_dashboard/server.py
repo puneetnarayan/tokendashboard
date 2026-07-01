@@ -19,6 +19,7 @@ from .pricing import load_pricing, cost_for, get_plan, set_plan
 from .tips import all_tips, dismiss_tip
 from .scanner import scan_dir
 from .skills import cached_catalog
+from . import rtk as _rtk
 
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -139,6 +140,8 @@ def build_handler(db_path: str, projects_dir: str):
                 return _send_json(self, session_turns(db_path, sid))
             if path == "/api/tips":
                 return _send_json(self, all_tips(db_path))
+            if path == "/api/rtk":
+                return _send_json(self, _rtk.stats() or {"installed": False})
             if path == "/api/plan":
                 return _send_json(self, {"plan": get_plan(db_path), "pricing": pricing})
             if path == "/api/scan":
