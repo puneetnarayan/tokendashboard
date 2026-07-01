@@ -34,13 +34,14 @@ export default async function (root) {
   const range = readRange();
   const since = sinceIso(range);
 
-  const [totals, projects, sessions, tools, daily, byModel] = await Promise.all([
+  const [totals, projects, sessions, tools, daily, byModel, rtk] = await Promise.all([
     api(withSince('/api/overview', since)),
     api(withSince('/api/projects', since)),
     api(withSince('/api/sessions?limit=10', since)),
     api(withSince('/api/tools', since)),
     api(withSince('/api/daily', since)),
     api(withSince('/api/by-model', since)),
+    api('/api/rtk'),
   ]);
 
   const cacheCreate =
@@ -66,7 +67,7 @@ export default async function (root) {
       ${rangeTabs}
     </div>
 
-    <div class="row cols-7">
+    <div class="row cols-8">
       ${kpi('Sessions',     fmt.int(totals.sessions),       fmt.int(totals.sessions))}
       ${kpi('Turns',        fmt.int(totals.turns),          fmt.int(totals.turns))}
       ${kpi('Input',        fmt.compact(totals.input_tokens),       fmt.int(totals.input_tokens) + ' tokens')}
@@ -78,6 +79,7 @@ export default async function (root) {
         <div class="value" title="${fmt.usd(totals.cost_usd)}">${fmt.usd(totals.cost_usd)}</div>
         ${planSubtitle()}
       </div>
+      ${rtkKpi(rtk)}
     </div>
 
     <details class="card glossary" style="margin-top:16px">
@@ -193,4 +195,25 @@ function planSubtitle() {
   const p = state.pricing.plans[state.plan];
   if (!p || !p.monthly) return '';
   return `<div class="sub">pay $${p.monthly}/mo on ${fmt.htmlSafe(p.label)}</div>`;
+}
+
+function rtkKpi(rtk) {
+  if (!rtk || !rtk.installed) return `
+    <div class="card kpi" style="opacity:.5" title="RTK compresses Bash output before it reaches the LLM — install to track savings">
+      <div class="label">RTK saved</div>
+      <div class="value" style="font-size:12px">not installed</div>
+      <div class="sub"><a href="#/tips">install →</a></div>
+    </div>`;
+  if (rtk.status === 'no_data') return `
+    <div class="card kpi" style="opacity:.6" title="RTK installed but no commands tracked yet — check the PreToolUse hook">
+      <div class="label">RTK saved</div>
+      <div class="value" style="font-size:12px">no data yet</div>
+      <div class="sub"><a href="#/tips">check hook →</a></div>
+    </div>`;
+  return `
+    <div class="card kpi" title="Lifetime Bash output tokens saved by RTK compression">
+      <div class="label">RTK saved</div>
+      <div class="value">${fmt.compact(rtk.total_saved)}</div>
+      <div class="sub">${rtk.efficiency_pct.toFixed(0)}% efficiency</div>
+    </div>`;
 }

@@ -320,9 +320,10 @@ def session_turns(db_path, session_id: str) -> list:
         return [dict(r) for r in c.execute(sql, (session_id,))]
 
 
-def daily_token_breakdown(db_path, since=None, until=None) -> list:
+def daily_token_breakdown(db_path, since=None, until=None, project_slug=None) -> list:
     """One row per day: stacked bar data for input/output/cache_read/cache_create."""
-    rng, args = _range_clause(since, until)
+    rng, rargs = _range_clause(since, until)
+    prj, pargs = _project_clause(project_slug)
     sql = f"""
       SELECT substr(timestamp, 1, 10) AS day,
              COALESCE(SUM(input_tokens),0)      AS input_tokens,
@@ -331,12 +332,12 @@ def daily_token_breakdown(db_path, since=None, until=None) -> list:
              COALESCE(SUM(cache_create_5m_tokens),0)
                + COALESCE(SUM(cache_create_1h_tokens),0) AS cache_create_tokens
         FROM messages
-       WHERE timestamp IS NOT NULL {rng}
+       WHERE timestamp IS NOT NULL {rng}{prj}
        GROUP BY day
        ORDER BY day ASC
     """
     with connect(db_path) as c:
-        return [dict(r) for r in c.execute(sql, args)]
+        return [dict(r) for r in c.execute(sql, (*rargs, *pargs))]
 
 
 def skill_breakdown(db_path, since=None, until=None, project_slug=None) -> list:
@@ -366,9 +367,10 @@ def skill_breakdown(db_path, since=None, until=None, project_slug=None) -> list:
         return [dict(r) for r in c.execute(sql, (*rargs, *pargs))]
 
 
-def model_breakdown(db_path, since=None, until=None) -> list:
+def model_breakdown(db_path, since=None, until=None, project_slug=None) -> list:
     """Per-model token totals + turn count. Caller computes cost via pricing."""
-    rng, args = _range_clause(since, until)
+    rng, rargs = _range_clause(since, until)
+    prj, pargs = _project_clause(project_slug)
     sql = f"""
       SELECT COALESCE(model, 'unknown') AS model,
              COUNT(*) AS turns,
@@ -378,9 +380,9 @@ def model_breakdown(db_path, since=None, until=None) -> list:
              COALESCE(SUM(cache_create_5m_tokens),0)  AS cache_create_5m_tokens,
              COALESCE(SUM(cache_create_1h_tokens),0)  AS cache_create_1h_tokens
         FROM messages
-       WHERE type = 'assistant' {rng}
+       WHERE type = 'assistant' {rng}{prj}
        GROUP BY model
        ORDER BY (input_tokens + output_tokens + cache_create_5m_tokens + cache_create_1h_tokens) DESC
     """
     with connect(db_path) as c:
-        return [dict(r) for r in c.execute(sql, args)]
+        return [dict(r) for r in c.execute(sql, (*rargs, *pargs))]

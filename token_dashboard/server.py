@@ -121,7 +121,7 @@ def build_handler(db_path: str, projects_dir: str):
                     since=since, until=until, project_slug=project,
                 ))
             if path == "/api/daily":
-                return _send_json(self, daily_token_breakdown(db_path, since, until))
+                return _send_json(self, daily_token_breakdown(db_path, since, until, project))
             if path == "/api/skills":
                 rows = skill_breakdown(db_path, since, until, project)
                 catalog = cached_catalog()
@@ -130,7 +130,7 @@ def build_handler(db_path: str, projects_dir: str):
                     r["tokens_per_call"] = info["tokens"] if info else None
                 return _send_json(self, rows)
             if path == "/api/by-model":
-                rows = model_breakdown(db_path, since, until)
+                rows = model_breakdown(db_path, since, until, project)
                 for r in rows:
                     c = cost_for(r["model"], r, pricing)
                     r["cost_usd"] = c["usd"]
