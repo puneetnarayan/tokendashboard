@@ -177,10 +177,101 @@ def outlier_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
     return out
 
 
+def tool_tips() -> List[dict]:
+    """Surface install/config hints for RTK, codebase-memory-mcp, and treehouse."""
+    import shutil
+    from . import rtk as _rtk
+    tips: List[dict] = []
+
+    # RTK — distinguish absent/wrong-package from present-but-empty
+    rtk = _rtk.stats()
+    if rtk is None:
+        pass  # timeout or unexpected error — skip rather than mislead
+    elif not rtk.get("installed"):
+        tips.append({
+            "key": "tool:rtk-absent",
+            "category": "tool",
+            "title": "RTK not installed — potential 60–90% Bash token savings",
+            "body": (
+                "RTK compresses Bash output before it reaches the LLM context. "
+                "Install from source to avoid the crates.io name collision: "
+                "`cargo install --git https://github.com/rtk-ai/rtk` "
+                "then verify with `rtk gain` (must show savings, not an error). "
+                "Tip: `brew install rtk` may install Rust Type Kit instead — verify."
+            ),
+            "scope": "rtk",
+        })
+    elif rtk.get("status") == "no_data":
+        tips.append({
+            "key": "tool:rtk-no-data",
+            "category": "tool",
+            "title": "RTK installed but no tracked commands yet",
+            "body": (
+                "Run Claude Code sessions with the RTK PreToolUse hook active. "
+                "Check `.claude/settings.json` for the hook entry. "
+                "Then run `rtk gain` to confirm savings are being tracked."
+            ),
+            "scope": "rtk",
+        })
+    elif rtk.get("efficiency_pct", 100) < 40:
+        tips.append({
+            "key": "tool:rtk-low-efficiency",
+            "category": "tool",
+            "title": f"RTK efficiency is low ({rtk['efficiency_pct']:.0f}%)",
+            "body": (
+                "Some Bash commands may not be proxied through RTK. "
+                "Check your PreToolUse hook is registered in `.claude/settings.json` "
+                "and that it fires on Bash calls."
+            ),
+            "scope": "rtk",
+        })
+
+    # codebase-memory-mcp
+    if not shutil.which("codebase-memory-mcp"):
+        tips.append({
+            "key": "tool:codebase-memory-absent",
+            "category": "tool",
+            "title": "codebase-memory-mcp not installed — 120× fewer tokens on code exploration",
+            "body": (
+                "Indexes your codebase into a knowledge graph. "
+                "Structural queries use ~3,400 tokens vs ~412,000 via file-by-file search. "
+                "Install: `curl -fsSL https://raw.githubusercontent.com/DeusData/"
+                "codebase-memory-mcp/main/install.sh | bash`"
+            ),
+            "scope": "codebase-memory-mcp",
+        })
+
+    # treehouse — only suggest if worktrees in use
+    if not shutil.which("treehouse"):
+        import subprocess
+        try:
+            r = subprocess.run(
+                ["git", "worktree", "list"], capture_output=True, text=True, timeout=3
+            )
+            if r.returncode == 0 and len(r.stdout.strip().splitlines()) > 1:
+                tips.append({
+                    "key": "tool:treehouse-absent",
+                    "category": "tool",
+                    "title": "treehouse not installed — reusable worktree pools for parallel agents",
+                    "body": (
+                        "You have active git worktrees. Treehouse manages a pool of "
+                        "reusable worktrees so parallel agent sessions avoid reinstalling "
+                        "dependencies each time. "
+                        "Install: `curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh`"
+                    ),
+                    "scope": "treehouse",
+                })
+        except Exception:
+            pass
+
+    return tips
+
+
 def all_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
     return [
         *cache_discipline_tips(db_path, today_iso),
         *repeated_target_tips(db_path, today_iso),
         *right_size_tips(db_path, today_iso),
         *outlier_tips(db_path, today_iso),
+        *tool_tips(),
     ]
