@@ -1,9 +1,37 @@
-import { api, fmt } from '/web/app.js';
+import { api, fmt, state } from '/web/app.js';
+import { barChart, donutChart, stackedBarChart } from '/web/charts.js';
+
+const RANGES = [
+  { key: '7d',  label: '7d',  days: 7 },
+  { key: '30d', label: '30d', days: 30 },
+  { key: '90d', label: '90d', days: 90 },
+  { key: 'all', label: 'All', days: null },
+];
+
+function readRange() {
+  const q = (location.hash.split('?')[1] || '');
+  const m = /(?:^|&)range=([^&]+)/.exec(q);
+  const k = m && decodeURIComponent(m[1]);
+  return RANGES.find(r => r.key === k) || RANGES[1];
+}
+
+function sinceIso(range) {
+  if (!range.days) return null;
+  return new Date(Date.now() - range.days * 86400 * 1000).toISOString();
+}
+
+function qs(base, params) {
+  const parts = Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
+  return parts.length ? `${base}?${parts.join('&')}` : base;
+}
 
 export default async function (root) {
-  const slug = location.hash.replace(/^#\/projects\//, '').split('?')[0];
-  if (slug && slug !== '/projects') {
-    return renderDetail(root, decodeURIComponent(slug));
+  const hashPath = location.hash.replace(/^#/, '');
+  const slug = hashPath.startsWith('/projects/')
+    ? decodeURIComponent(hashPath.slice('/projects/'.length).split('?')[0])
+    : null;
+  if (slug) {
+    return renderDetail(root, slug);
   }
 
   const rows = await api('/api/projects');
@@ -29,54 +57,82 @@ export default async function (root) {
 
 async function renderDetail(root, slug) {
   const enc = encodeURIComponent(slug);
-  const [totals, tools, skills, sessions] = await Promise.all([
-    api(`/api/overview?project=${enc}`),
-    api(`/api/tools?project=${enc}`),
-    api(`/api/skills?project=${enc}`),
-    api(`/api/sessions?limit=10&project=${enc}`),
+  const range = readRange();
+  const since = sinceIso(range);
+
+  const [totals, tools, skills, sessions, daily, byModel] = await Promise.all([
+    api(qs('/api/overview',  { project: enc, since })),
+    api(qs('/api/tools',     { project: enc, since })),
+    api(qs('/api/skills',    { project: enc, since })),
+    api(qs('/api/sessions',  { project: enc, since, limit: 10 })),
+    api(qs('/api/daily',     { project: enc, since })),
+    api(qs('/api/by-model',  { project: enc, since })),
   ]);
 
   const cacheCreate = (totals.cache_create_5m_tokens || 0) + (totals.cache_create_1h_tokens || 0);
   const cacheTotal  = (totals.cache_read_tokens || 0) + (totals.input_tokens || 0) + cacheCreate;
   const cacheHit    = cacheTotal > 0 ? totals.cache_read_tokens / cacheTotal : null;
 
-  const kpi = (label, val, sub = '') => `
-    <div class="card kpi">
+  const costUsd = byModel.reduce((sum, m) => sum + (m.cost_usd || 0), 0);
+
+  const kpi = (label, compact, full, cls = '') => `
+    <div class="card kpi ${cls}">
       <div class="label">${label}</div>
-      <div class="value">${val}</div>
-      ${sub ? `<div class="sub">${sub}</div>` : ''}
+      <div class="value" title="${full}">${compact}</div>
+    </div>`;
+
+  const rangeTabs = `
+    <div class="range-tabs" role="tablist">
+      ${RANGES.map(r => `<button data-range="${r.key}" class="${r.key === range.key ? 'active' : ''}">${r.label}</button>`).join('')}
     </div>`;
 
   root.innerHTML = `
-    <div style="margin-bottom:14px">
-      <a href="#/projects" style="font-size:13px;opacity:.7">← Projects</a>
-      <h2 style="margin:6px 0 0;font-size:18px">${fmt.htmlSafe(slug)}</h2>
+    <div class="flex" style="margin-bottom:14px;align-items:baseline">
+      <a href="#/projects" style="font-size:13px;opacity:.7;margin-right:12px">← Projects</a>
+      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">${fmt.htmlSafe(slug)}</h2>
+      <span class="muted" style="font-size:12px">${range.days ? `last ${range.days} days` : 'all time'}</span>
+      <div class="spacer"></div>
+      ${rangeTabs}
     </div>
 
-    <div class="row cols-5" style="margin-bottom:16px">
-      ${kpi('Sessions',    fmt.int(totals.sessions))}
-      ${kpi('Turns',       fmt.int(totals.turns))}
-      ${kpi('Input',       fmt.compact(totals.input_tokens), 'tokens')}
-      ${kpi('Output',      fmt.compact(totals.output_tokens), 'tokens')}
-      ${kpi('Cache hit',   cacheHit != null ? fmt.pct(cacheHit) : '—', cacheHit != null && cacheHit < 0.4 ? '<span style="color:#f87">low — target >40%</span>' : 'of input')}
-    </div>
-
-    <div class="row cols-2" style="margin-bottom:16px">
-      <div class="card">
-        <h3>Tools</h3>
-        <table>
-          <thead><tr><th>tool</th><th class="num">calls</th><th class="num">result tokens</th></tr></thead>
-          <tbody>
-            ${tools.length ? tools.map(t => `
-              <tr>
-                <td>${fmt.htmlSafe(t.tool_name)}</td>
-                <td class="num">${fmt.int(t.calls)}</td>
-                <td class="num">${fmt.compact(t.result_tokens)}</td>
-              </tr>`).join('') : '<tr><td colspan="3" class="muted">no tool calls</td></tr>'}
-          </tbody>
-        </table>
+    <div class="row cols-7">
+      ${kpi('Sessions',     fmt.int(totals.sessions),      fmt.int(totals.sessions))}
+      ${kpi('Turns',        fmt.int(totals.turns),         fmt.int(totals.turns))}
+      ${kpi('Input',        fmt.compact(totals.input_tokens),      fmt.int(totals.input_tokens) + ' tokens')}
+      ${kpi('Output',       fmt.compact(totals.output_tokens),     fmt.int(totals.output_tokens) + ' tokens')}
+      ${kpi('Cache read',   fmt.compact(totals.cache_read_tokens), fmt.int(totals.cache_read_tokens) + ' tokens')}
+      ${kpi('Cache hit',    cacheHit != null ? fmt.pct(cacheHit) : '—', cacheHit != null ? (cacheHit * 100).toFixed(1) + '%' : '—', cacheHit != null && cacheHit < 0.4 ? 'warn' : '')}
+      <div class="card kpi cost">
+        <div class="label">Est. cost</div>
+        <div class="value" title="${fmt.usd(costUsd)}">${fmt.usd(costUsd)}</div>
       </div>
+    </div>
 
+    <div class="row cols-2" style="margin-top:16px">
+      <div class="card">
+        <h3>Daily work</h3>
+        <p class="muted" style="margin:-4px 0 10px;font-size:12px">Input + output + cache create — what you paid for.</p>
+        <div id="ch-daily-billable" style="height:240px"></div>
+      </div>
+      <div class="card">
+        <h3>Daily cache reads</h3>
+        <p class="muted" style="margin:-4px 0 10px;font-size:12px">Cache reads cost ~10× less — high numbers are good.</p>
+        <div id="ch-daily-cache" style="height:240px"></div>
+      </div>
+    </div>
+
+    <div class="row cols-2" style="margin-top:16px">
+      <div class="card">
+        <h3>Token usage by model</h3>
+        <div id="ch-model" style="height:280px"></div>
+      </div>
+      <div class="card">
+        <h3>Top tools (by call count)</h3>
+        <div id="ch-tools" style="height:280px"></div>
+      </div>
+    </div>
+
+    <div class="row cols-2" style="margin-top:16px">
       <div class="card">
         <h3>Skills</h3>
         <table>
@@ -92,20 +148,59 @@ async function renderDetail(root, slug) {
           </tbody>
         </table>
       </div>
-    </div>
 
-    <div class="card">
-      <h3>Recent sessions <a href="#/sessions" style="font-weight:400;font-size:12px;float:right">all sessions →</a></h3>
-      <table>
-        <thead><tr><th>started</th><th class="num">turns</th><th class="num">tokens</th></tr></thead>
-        <tbody>
-          ${sessions.length ? sessions.map(s => `
-            <tr>
-              <td class="mono">${fmt.ts(s.started)}</td>
-              <td class="num">${fmt.int(s.turns)}</td>
-              <td class="num">${fmt.compact(s.tokens)}</td>
-            </tr>`).join('') : '<tr><td colspan="3" class="muted">no sessions</td></tr>'}
-        </tbody>
-      </table>
-    </div>`;
+      <div class="card">
+        <h3>Recent sessions</h3>
+        <table>
+          <thead><tr><th>started</th><th class="num">turns</th><th class="num">tokens</th></tr></thead>
+          <tbody>
+            ${sessions.length ? sessions.map(s => `
+              <tr>
+                <td class="mono">${fmt.ts(s.started)}</td>
+                <td class="num">${fmt.int(s.turns)}</td>
+                <td class="num">${fmt.compact(s.tokens)}</td>
+              </tr>`).join('') : '<tr><td colspan="3" class="muted">no sessions</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  root.querySelectorAll('.range-tabs button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const base = location.hash.replace(/^#/, '').split('?')[0];
+      location.hash = '#' + base + '?range=' + btn.dataset.range;
+    });
+  });
+
+  stackedBarChart(document.getElementById('ch-daily-billable'), {
+    categories: daily.map(d => d.day),
+    series: [
+      { name: 'input',        values: daily.map(d => d.input_tokens),        color: '#4A9EFF' },
+      { name: 'output',       values: daily.map(d => d.output_tokens),       color: '#7C5CFF' },
+      { name: 'cache create', values: daily.map(d => d.cache_create_tokens), color: '#E8A23B' },
+    ],
+  });
+
+  stackedBarChart(document.getElementById('ch-daily-cache'), {
+    categories: daily.map(d => d.day),
+    series: [
+      { name: 'cache read', values: daily.map(d => d.cache_read_tokens), color: '#3FB68B' },
+    ],
+  });
+
+  donutChart(document.getElementById('ch-model'),
+    byModel.map(m => ({
+      name: fmt.modelShort(m.model) || 'unknown',
+      value: (m.input_tokens || 0) + (m.output_tokens || 0)
+           + (m.cache_create_5m_tokens || 0) + (m.cache_create_1h_tokens || 0),
+    })).filter(d => d.value > 0),
+  );
+
+  const topTools = tools.slice(0, 8);
+  barChart(document.getElementById('ch-tools'), {
+    categories: topTools.map(t => t.tool_name),
+    values: topTools.map(t => t.calls),
+    color: '#7C5CFF',
+  });
 }
