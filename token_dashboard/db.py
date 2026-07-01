@@ -130,6 +130,12 @@ def _range_clause(since, until, col: str = "timestamp"):
     return ((" AND " + " AND ".join(where)) if where else "", args)
 
 
+def _project_clause(project_slug):
+    if not project_slug:
+        return "", []
+    return " AND project_slug = ?", [project_slug]
+
+
 def _encode_slug(path: str) -> str:
     """Claude Code's project-slug encoding: each of `:`, `\\`, `/`, space → one `-`."""
     return re.sub(r"[:\\/ ]", "-", path)
@@ -186,8 +192,9 @@ def best_project_name(cwds, slug: str) -> str:
     return project_name_for(cwds[0] if cwds else None, slug)
 
 
-def overview_totals(db_path, since=None, until=None) -> dict:
-    rng, args = _range_clause(since, until)
+def overview_totals(db_path, since=None, until=None, project_slug=None) -> dict:
+    rng, rargs = _range_clause(since, until)
+    prj, pargs = _project_clause(project_slug)
     sql = f"""
       SELECT COUNT(DISTINCT session_id) AS sessions,
              SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
@@ -196,10 +203,10 @@ def overview_totals(db_path, since=None, until=None) -> dict:
              COALESCE(SUM(cache_read_tokens),0)       AS cache_read_tokens,
              COALESCE(SUM(cache_create_5m_tokens),0)  AS cache_create_5m_tokens,
              COALESCE(SUM(cache_create_1h_tokens),0)  AS cache_create_1h_tokens
-        FROM messages WHERE 1=1 {rng}
+        FROM messages WHERE 1=1 {rng}{prj}
     """
     with connect(db_path) as c:
-        return dict(c.execute(sql, args).fetchone())
+        return dict(c.execute(sql, (*rargs, *pargs)).fetchone())
 
 
 def expensive_prompts(db_path, limit: int = 50, sort: str = "tokens") -> list:
@@ -253,36 +260,38 @@ def project_summary(db_path, since=None, until=None) -> list:
     return rows
 
 
-def tool_token_breakdown(db_path, since=None, until=None) -> list:
-    rng, args = _range_clause(since, until)
+def tool_token_breakdown(db_path, since=None, until=None, project_slug=None) -> list:
+    rng, rargs = _range_clause(since, until)
+    prj, pargs = _project_clause(project_slug)
     sql = f"""
       SELECT tool_name,
              COUNT(*) AS calls,
              COALESCE(SUM(result_tokens),0) AS result_tokens
         FROM tool_calls
-       WHERE tool_name != '_tool_result' {rng}
+       WHERE tool_name != '_tool_result' {rng}{prj}
        GROUP BY tool_name
        ORDER BY calls DESC
     """
     with connect(db_path) as c:
-        return [dict(r) for r in c.execute(sql, args)]
+        return [dict(r) for r in c.execute(sql, (*rargs, *pargs))]
 
 
-def recent_sessions(db_path, limit: int = 20, since=None, until=None) -> list:
-    rng, args = _range_clause(since, until)
+def recent_sessions(db_path, limit: int = 20, since=None, until=None, project_slug=None) -> list:
+    rng, rargs = _range_clause(since, until)
+    prj, pargs = _project_clause(project_slug)
     sql = f"""
       SELECT session_id, project_slug,
              MIN(timestamp) AS started, MAX(timestamp) AS ended,
              SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
              SUM(input_tokens)+SUM(output_tokens) AS tokens
         FROM messages m
-       WHERE 1=1 {rng}
+       WHERE 1=1 {rng}{prj}
        GROUP BY session_id
        ORDER BY ended DESC
        LIMIT ?
     """
     with connect(db_path) as c:
-        rows = [dict(r) for r in c.execute(sql, (*args, limit))]
+        rows = [dict(r) for r in c.execute(sql, (*rargs, *pargs, limit))]
         # Cache per-slug name lookups so we don't query once per session.
         slug_cache = {}
         for r in rows:
@@ -330,7 +339,7 @@ def daily_token_breakdown(db_path, since=None, until=None) -> list:
         return [dict(r) for r in c.execute(sql, args)]
 
 
-def skill_breakdown(db_path, since=None, until=None) -> list:
+def skill_breakdown(db_path, since=None, until=None, project_slug=None) -> list:
     """Per-skill invocation counts, distinct sessions, last-used timestamp.
 
     Token attribution per skill is not included: in Claude Code, a Skill's
@@ -341,19 +350,20 @@ def skill_breakdown(db_path, since=None, until=None) -> list:
     invocation row) could enable precise attribution; for now we only expose
     the reliable counts.
     """
-    rng, args = _range_clause(since, until)
+    rng, rargs = _range_clause(since, until)
+    prj, pargs = _project_clause(project_slug)
     sql = f"""
       SELECT target AS skill,
              COUNT(*) AS invocations,
              COUNT(DISTINCT session_id) AS sessions,
              MAX(timestamp) AS last_used
         FROM tool_calls
-       WHERE tool_name = 'Skill' AND target IS NOT NULL AND target != '' {rng}
+       WHERE tool_name = 'Skill' AND target IS NOT NULL AND target != '' {rng}{prj}
        GROUP BY target
        ORDER BY invocations DESC
     """
     with connect(db_path) as c:
-        return [dict(r) for r in c.execute(sql, args)]
+        return [dict(r) for r in c.execute(sql, (*rargs, *pargs))]
 
 
 def model_breakdown(db_path, since=None, until=None) -> list:

@@ -83,14 +83,15 @@ def build_handler(db_path: str, projects_dir: str):
             url = urlparse(self.path)
             qs = parse_qs(url.query or "")
             path = url.path
-            since = qs.get("since", [None])[0]
-            until = qs.get("until", [None])[0]
+            since   = qs.get("since",   [None])[0]
+            until   = qs.get("until",   [None])[0]
+            project = qs.get("project", [None])[0]
             if path in ("/", "/index.html"):
                 return _serve_static(self, "index.html")
             if path.startswith("/web/"):
                 return _serve_static(self, path[5:])
             if path == "/api/overview":
-                totals = overview_totals(db_path, since, until)
+                totals = overview_totals(db_path, since, until, project)
                 cost_usd = 0.0
                 for m in model_breakdown(db_path, since, until):
                     c = cost_for(m["model"], m, pricing)
@@ -113,16 +114,16 @@ def build_handler(db_path: str, projects_dir: str):
             if path == "/api/projects":
                 return _send_json(self, project_summary(db_path, since, until))
             if path == "/api/tools":
-                return _send_json(self, tool_token_breakdown(db_path, since, until))
+                return _send_json(self, tool_token_breakdown(db_path, since, until, project))
             if path == "/api/sessions":
                 return _send_json(self, recent_sessions(
                     db_path, limit=_clamp_limit(qs.get("limit", ["20"])[0], 20),
-                    since=since, until=until,
+                    since=since, until=until, project_slug=project,
                 ))
             if path == "/api/daily":
                 return _send_json(self, daily_token_breakdown(db_path, since, until))
             if path == "/api/skills":
-                rows = skill_breakdown(db_path, since, until)
+                rows = skill_breakdown(db_path, since, until, project)
                 catalog = cached_catalog()
                 for r in rows:
                     info = catalog.get(r["skill"])
