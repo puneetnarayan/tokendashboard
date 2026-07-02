@@ -28,6 +28,7 @@ class Integrations:
 @dataclass
 class Config:
     integrations: Integrations = field(default_factory=Integrations)
+    custom_models: dict = field(default_factory=dict)
 
     def rtk_enabled(self, rtk_installed: bool) -> bool:
         v = self.integrations.rtk
@@ -46,9 +47,13 @@ class Config:
         return shutil.which("npx") is not None  # "auto": present if npx available
 
 
+def _config_path() -> Path:
+    return Path(os.environ.get("TOKEN_DASHBOARD_CONFIG") or str(_DEFAULT_PATH))
+
+
 def load() -> Config:
     """Load config. Missing/corrupt file returns defaults."""
-    p = Path(os.environ.get("TOKEN_DASHBOARD_CONFIG") or str(_DEFAULT_PATH))
+    p = _config_path()
     cfg = Config()
     if not p.exists():
         return cfg
@@ -57,6 +62,18 @@ def load() -> Config:
         ints = raw.get("integrations") or {}
         cfg.integrations.rtk    = str(ints.get("rtk",    "auto"))
         cfg.integrations.lavish = str(ints.get("lavish", "auto"))
+        cfg.custom_models       = raw.get("custom_models") or {}
     except Exception:
         pass  # corrupt config → silently use defaults
     return cfg
+
+
+def save(cfg: Config) -> None:
+    """Persist config. Merges with existing file to avoid clobbering unknown keys."""
+    p = _config_path()
+    try:
+        existing = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except Exception:
+        existing = {}
+    existing["custom_models"] = cfg.custom_models
+    p.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")

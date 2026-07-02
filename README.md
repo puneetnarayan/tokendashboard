@@ -27,7 +27,7 @@ No `pip install`. No Node.js. No build step.
 ## Quickstart
 
 ```bash
-git clone https://github.com/nateherkai/token-dashboard.git
+git clone https://github.com/VipinKumarSME/token-dashboard.git
 cd token-dashboard
 python3 cli.py dashboard
 ```
@@ -89,15 +89,25 @@ Change the port: `PORT=9000 python3 cli.py dashboard`.
 
 The dashboard is a single page with a hash-router tab bar across the top. Each tab is backed by its own JSON API under `/api/`:
 
-- **Overview** — all-time input/output/cache tokens, sessions, turns, estimated cost on your chosen plan, daily work and cache-read charts, tokens-by-project, token share by model, top tools by call count, and recent sessions. This is the landing tab.
+- **Overview** — all-time input/output/cache tokens, sessions, turns, estimated cost on your chosen plan, daily work and cache-read charts, tokens-by-project, token share by model, top tools by call count, recent sessions, and an **RTK savings KPI card** showing lifetime Bash output tokens saved by RTK compression. This is the landing tab.
 - **Prompts** — your most expensive user prompts ranked by tokens. Click any row to see the assistant response, tool calls made, and the size of each tool result.
 - **Sessions** — turn-by-turn view of any single session, with per-turn tokens and tool calls.
-- **Projects** — per-project comparison: tokens, session counts, and which files were touched most.
+- **Projects** — per-project summary showing sessions, turns, billable tokens, cache reads, and estimated cost. Click any project to **drill in**: full Overview-style layout with range tabs (7d / 30d / 90d / All), KPI cards, daily billable and cache-read charts, model donut, top tools bar, skills table, and recent sessions — all scoped to that project.
 - **Skills** — which skills you invoke most often, and (where we can measure them) their token cost. See [limitations](docs/KNOWN_LIMITATIONS.md#skills-token-counts-are-partial).
 - **Tips** — rule-based suggestions for reducing token usage (repeated file reads, oversized tool results, low cache-hit rate, etc.).
-- **Settings** — switch pricing between API / Pro / Max / Max-20x so cost figures everywhere else reflect your actual plan.
+- **Settings** — switch pricing between API / Pro / Max / Max-20x; view the built-in pricing table; add custom rates for third-party Bedrock models (e.g. `zai.glm-5`, `moonshotai.kimi-k2.5`) so their token costs calculate correctly.
 
 The Overview tab also has a built-in "What do these numbers mean?" panel that explains input/output/cache tokens in plain English.
+
+## RTK integration
+
+[RTK](https://github.com/reachingforthejack/rtk) compresses Bash command output before it reaches the LLM, cutting token usage 60–90% on command-heavy sessions. When RTK is installed and the Claude Code hook is active, the Overview tab shows a **RTK saved** KPI card with lifetime tokens saved and compression efficiency.
+
+To install RTK, visit the Tips tab for step-by-step instructions.
+
+## Custom model pricing
+
+For models not in `pricing.json` (third-party Bedrock models, custom deployments), go to **Settings → Custom model pricing** and enter the `$/1M input` and `$/1M output` rates. Rates are saved to `~/.claude/token-dashboard-config.json` and applied immediately to all cost calculations across the dashboard.
 
 ## Troubleshooting
 

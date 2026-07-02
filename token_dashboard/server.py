@@ -20,6 +20,7 @@ from .tips import all_tips, dismiss_tip
 from .scanner import scan_dir
 from .skills import cached_catalog
 from . import rtk as _rtk
+from . import config as _cfg
 
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -90,11 +91,12 @@ def build_handler(db_path: str, projects_dir: str):
                 return _serve_static(self, "index.html")
             if path.startswith("/web/"):
                 return _serve_static(self, path[5:])
+            custom_models = _cfg.load().custom_models
             if path == "/api/overview":
                 totals = overview_totals(db_path, since, until, project)
                 cost_usd = 0.0
-                for m in model_breakdown(db_path, since, until):
-                    c = cost_for(m["model"], m, pricing)
+                for m in model_breakdown(db_path, since, until, project):
+                    c = cost_for(m["model"], m, pricing, custom_models)
                     if c["usd"] is not None:
                         cost_usd += c["usd"]
                 totals["cost_usd"] = round(cost_usd, 4)
@@ -108,11 +110,21 @@ def build_handler(db_path: str, projects_dir: str):
                         "input_tokens": 0, "output_tokens": 0,
                         "cache_read_tokens": r["cache_read_tokens"],
                         "cache_create_5m_tokens": 0, "cache_create_1h_tokens": 0,
-                    }, pricing)
+                    }, pricing, custom_models)
                     r["estimated_cost_usd"] = c["usd"]
                 return _send_json(self, rows)
             if path == "/api/projects":
-                return _send_json(self, project_summary(db_path, since, until))
+                rows = project_summary(db_path, since, until)
+                for r in rows:
+                    cost = 0.0
+                    for m in model_breakdown(db_path, since, until, r["project_slug"]):
+                        c = cost_for(m["model"], m, pricing, custom_models)
+                        if c["usd"] is not None:
+                            cost += c["usd"]
+                    r["cost_usd"] = round(cost, 4)
+                return _send_json(self, rows)
+            if path == "/api/custom-models":
+                return _send_json(self, _cfg.load().custom_models)
             if path == "/api/tools":
                 return _send_json(self, tool_token_breakdown(db_path, since, until, project))
             if path == "/api/sessions":
@@ -121,7 +133,7 @@ def build_handler(db_path: str, projects_dir: str):
                     since=since, until=until, project_slug=project,
                 ))
             if path == "/api/daily":
-                return _send_json(self, daily_token_breakdown(db_path, since, until))
+                return _send_json(self, daily_token_breakdown(db_path, since, until, project))
             if path == "/api/skills":
                 rows = skill_breakdown(db_path, since, until, project)
                 catalog = cached_catalog()
@@ -130,9 +142,9 @@ def build_handler(db_path: str, projects_dir: str):
                     r["tokens_per_call"] = info["tokens"] if info else None
                 return _send_json(self, rows)
             if path == "/api/by-model":
-                rows = model_breakdown(db_path, since, until)
+                rows = model_breakdown(db_path, since, until, project)
                 for r in rows:
-                    c = cost_for(r["model"], r, pricing)
+                    c = cost_for(r["model"], r, pricing, custom_models)
                     r["cost_usd"] = c["usd"]
                     r["cost_estimated"] = c["estimated"]
                 return _send_json(self, rows)
@@ -144,7 +156,7 @@ def build_handler(db_path: str, projects_dir: str):
             if path == "/api/rtk":
                 return _send_json(self, _rtk.stats() or {"installed": False})
             if path == "/api/plan":
-                return _send_json(self, {"plan": get_plan(db_path), "pricing": pricing})
+                return _send_json(self, {"plan": get_plan(db_path), "pricing": pricing, "custom_models": custom_models})
             if path == "/api/scan":
                 n = scan_dir(projects_dir, db_path)
                 return _send_json(self, n)
@@ -188,6 +200,23 @@ def build_handler(db_path: str, projects_dir: str):
             if url.path == "/api/tips/dismiss":
                 dismiss_tip(db_path, body.get("key", ""))
                 return _send_json(self, {"ok": True})
+            if url.path == "/api/custom-models":
+                c = _cfg.load()
+                action = body.get("action", "set")
+                model_id = (body.get("model") or "").strip()
+                if not model_id:
+                    return _send_error(self, 400, "model is required")
+                if action == "delete":
+                    c.custom_models.pop(model_id, None)
+                else:
+                    try:
+                        inp = float(body.get("input", 0))
+                        out = float(body.get("output", 0))
+                    except (TypeError, ValueError):
+                        return _send_error(self, 400, "input and output must be numbers")
+                    c.custom_models[model_id] = {"input": inp, "output": out}
+                _cfg.save(c)
+                return _send_json(self, {"ok": True, "custom_models": c.custom_models})
             self.send_response(404)
             self.end_headers()
 
