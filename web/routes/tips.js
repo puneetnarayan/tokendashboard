@@ -11,10 +11,9 @@ export default async function (root) {
       ${tips.map(t => `
         <div class="tip">
           <div class="tip-head">
-            <span class="badge">${fmt.htmlSafe(t.category)}</span>
-            <strong>${fmt.htmlSafe(t.title)}</strong>
-            <span class="spacer"></span>
-            <button class="ghost" data-key="${fmt.htmlSafe(t.key)}">dismiss</button>
+            <span class="badge" style="flex-shrink:0">${fmt.htmlSafe(t.category)}</span>
+            <strong class="blur-sensitive" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1" title="${fmt.htmlSafe(t.title)}">${fmt.htmlSafe(fmt.short(t.title, 120))}</strong>
+            <button class="ghost" style="flex-shrink:0" data-key="${fmt.htmlSafe(t.key)}">dismiss</button>
           </div>
           <p class="tip-body">${fmt.htmlSafe(t.body)}</p>
         </div>`).join('')}
