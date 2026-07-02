@@ -144,7 +144,18 @@ async function renderDetail(root, slug) {
     <div class="row cols-2" style="margin-top:16px">
       <div class="card">
         <h3>Token usage by model</h3>
-        <div id="ch-model" style="height:280px"></div>
+        <div id="ch-model" style="height:220px"></div>
+        <table style="margin-top:12px">
+          <thead><tr><th>model</th><th class="num">billable tokens</th><th class="num">est. cost</th></tr></thead>
+          <tbody>
+            ${byModel.filter(m => (m.input_tokens||0)+(m.output_tokens||0)+(m.cache_create_5m_tokens||0)+(m.cache_create_1h_tokens||0) > 0).map(m => `
+              <tr>
+                <td><span class="badge">${fmt.htmlSafe(fmt.modelShort(m.model) || m.model)}</span></td>
+                <td class="num">${fmt.compact((m.input_tokens||0)+(m.output_tokens||0)+(m.cache_create_5m_tokens||0)+(m.cache_create_1h_tokens||0))}</td>
+                <td class="num">${m.cost_usd != null ? fmt.usd(m.cost_usd) : '—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
       </div>
       <div class="card">
         <h3>Top tools (by call count)</h3>
