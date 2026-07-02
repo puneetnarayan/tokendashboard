@@ -34,13 +34,26 @@ export default async function (root) {
     return renderDetail(root, slug);
   }
 
-  const rows = await api('/api/projects');
+  const range = readRange();
+  const since = sinceIso(range);
+  const rows = await api(qs('/api/projects', { since }));
+
+  const rangeTabs = `
+    <div class="range-tabs" role="tablist">
+      ${RANGES.map(r => `<button data-range="${r.key}" class="${r.key === range.key ? 'active' : ''}">${r.label}</button>`).join('')}
+    </div>`;
+
   root.innerHTML = `
+    <div class="flex" style="margin-bottom:14px;align-items:baseline">
+      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">Projects</h2>
+      <span class="muted" style="font-size:12px">${range.days ? `last ${range.days} days` : 'all time'}</span>
+      <div class="spacer"></div>
+      ${rangeTabs}
+    </div>
     <div class="card">
-      <h2>Projects</h2>
-      <p class="muted" style="margin:-8px 0 14px">Sorted by billable token spend. Click a project to drill in.</p>
+      <p class="muted" style="margin:0 0 14px">Sorted by billable token spend. Click a project to drill in.</p>
       <table>
-        <thead><tr><th>project</th><th class="num">sessions</th><th class="num">turns</th><th class="num">billable tokens</th><th class="num">cache reads</th></tr></thead>
+        <thead><tr><th>project</th><th class="num">sessions</th><th class="num">turns</th><th class="num">billable tokens</th><th class="num">cache reads</th><th class="num">est. cost</th></tr></thead>
         <tbody>
           ${rows.map(r => `
             <tr style="cursor:pointer" onclick="location.hash='#/projects/${encodeURIComponent(r.project_slug)}'">
@@ -49,10 +62,17 @@ export default async function (root) {
               <td class="num">${fmt.int(r.turns)}</td>
               <td class="num">${fmt.int(r.billable_tokens)}</td>
               <td class="num">${fmt.int(r.cache_read_tokens)}</td>
+              <td class="num">${r.cost_usd != null ? fmt.usd(r.cost_usd) : '—'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
     </div>`;
+
+  root.querySelectorAll('.range-tabs button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      location.hash = '#/projects?range=' + btn.dataset.range;
+    });
+  });
 }
 
 async function renderDetail(root, slug) {

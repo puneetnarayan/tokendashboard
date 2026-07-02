@@ -20,17 +20,29 @@ def _tier_from_name(model: str) -> Optional[str]:
     return None
 
 
-def cost_for(model: str, usage: dict, pricing: dict) -> dict:
+def cost_for(model: str, usage: dict, pricing: dict, custom_models: Optional[dict] = None) -> dict:
     """Return {usd, estimated, breakdown}. usd=None when no tier match."""
     rates = pricing["models"].get(model)
     estimated = False
     if rates is None:
-        tier = _tier_from_name(model or "")
-        if tier and tier in pricing["tier_fallback"]:
-            rates = pricing["tier_fallback"][tier]
-            estimated = True
-        else:
-            return {"usd": None, "estimated": True, "breakdown": {}}
+        if custom_models:
+            cm = custom_models.get(model)
+            if cm:
+                rates = {
+                    "input": float(cm.get("input", 0)),
+                    "output": float(cm.get("output", 0)),
+                    "cache_read": 0.0,
+                    "cache_create_5m": 0.0,
+                    "cache_create_1h": 0.0,
+                }
+                estimated = True
+        if rates is None:
+            tier = _tier_from_name(model or "")
+            if tier and tier in pricing["tier_fallback"]:
+                rates = pricing["tier_fallback"][tier]
+                estimated = True
+            else:
+                return {"usd": None, "estimated": True, "breakdown": {}}
     bd = {
         "input":           usage["input_tokens"]            * rates["input"]           / 1_000_000,
         "output":          usage["output_tokens"]           * rates["output"]          / 1_000_000,
