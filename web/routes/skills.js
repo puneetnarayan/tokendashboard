@@ -74,6 +74,7 @@ export default async function (root) {
             <tr>
               <td>
                 <span class="badge">${fmt.htmlSafe(s.skill)}</span>
+                ${s.file_path ? `<button data-open="${fmt.htmlSafe(s.file_path)}" style="margin-left:6px">Open in editor</button>` : ''}
                 ${s.description ? `<div class="muted" style="font-size:11px;margin-top:2px">${fmt.htmlSafe(s.description)}</div>` : ''}
               </td>
               <td class="num">${fmt.int(s.invocations)}</td>
@@ -89,6 +90,9 @@ export default async function (root) {
 
   root.querySelectorAll('.range-tabs button').forEach(btn => {
     btn.addEventListener('click', () => writeRange(btn.dataset.range));
+  });
+  root.querySelectorAll('[data-open]').forEach(btn => {
+    btn.addEventListener('click', () => { window.location.href = fmt.editorLink(btn.dataset.open); });
   });
 
   const top = skills.slice(0, 12);

@@ -41,6 +41,16 @@ class SkillProxyTests(unittest.TestCase):
         unknown = [r for r in rows if r["skill"] == "unknown-skill"][0]
         self.assertIsNone(unknown["proxy_tokens"])
         self.assertTrue(unknown["catalog_missing"])
+        self.assertIsNone(unknown["file_path"])
+
+    def test_file_path_passed_through_for_known_skill(self):
+        fake_catalog = {
+            "brainstorming": {"chars": 4000, "tokens": 1000, "path": "/x/SKILL.md"},
+        }
+        with patch("token_dashboard.skill_tokens.cached_catalog", return_value=fake_catalog):
+            rows = skill_cost_proxy(self.db)
+        brain = [r for r in rows if r["skill"] == "brainstorming"][0]
+        self.assertEqual(brain["file_path"], "/x/SKILL.md")
 
     def test_sorted_by_proxy_tokens_desc(self):
         fake_catalog = {
