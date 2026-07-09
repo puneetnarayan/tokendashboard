@@ -69,6 +69,13 @@ export default async function (root) {
 
       <h3>Privacy</h3>
       <p class="muted">Press <code>Cmd/Ctrl + B</code> anywhere to blur prompt text and other sensitive content for screenshots.</p>
+
+      <hr class="divider">
+
+      <h3>LiteLLM proxy</h3>
+      <div id="ll-settings-section">
+        <p class="muted" style="margin:0 0 12px;font-size:12px">Loading…</p>
+      </div>
     </div>`;
 
   $('#save').addEventListener('click', async () => {
@@ -104,6 +111,87 @@ export default async function (root) {
   }
 
   wireRemoveButtons();
+
+  // LiteLLM section — load after main render
+  (async () => {
+    const sec = document.getElementById('ll-settings-section');
+    try {
+      const st = await fetch('/api/litellm/status').then(r => r.json());
+      const srcBadge = st.source ? `<span class="badge" style="font-size:10px">${st.source}</span>` : '';
+      const discoveredHtml = (st.state !== 'not_configured' && st.proxy_origin) ? `
+        <p class="muted" style="font-size:12px;margin:0 0 10px">
+          Auto-discovered: <strong>${st.proxy_origin}</strong> ${srcBadge}<br>
+          Key: <code>${st.key_masked || '—'}</code> · User: ${st.user_alias || '—'}
+        </p>` : `
+        <p class="muted" style="font-size:12px;margin:0 0 10px">No proxy auto-detected. Fill in a manual override below.</p>`;
+
+      sec.innerHTML = `
+        ${discoveredHtml}
+        <details style="margin-bottom:12px">
+          <summary style="cursor:pointer;font-size:12px;color:var(--muted)">Manual override</summary>
+          <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+            <input id="ll-url" placeholder="Base URL (e.g. https://llmproxy.internal:4000)"
+              value="${st.proxy_origin || ''}"
+              style="background:var(--panel-2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:12px">
+            <input id="ll-key" type="password" placeholder="API key"
+              style="background:var(--panel-2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-family:var(--mono);font-size:12px">
+            <label style="font-size:12px;display:flex;align-items:center;gap:8px">
+              <input type="checkbox" id="ll-enabled" ${st.state !== 'disabled' ? 'checked' : ''}> Enabled
+            </label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="primary" id="ll-save" style="font-size:12px">Save</button>
+              <span id="ll-save-msg" class="muted" style="font-size:12px"></span>
+            </div>
+          </div>
+        </details>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="ghost" id="ll-test" style="font-size:12px">Test connection</button>
+          <span id="ll-test-result" class="muted" style="font-size:12px"></span>
+          <span style="flex:1"></span>
+          <button class="ghost" id="ll-clear" style="font-size:12px;color:var(--warn);border-color:var(--warn)">Clear sync data</button>
+          <span id="ll-clear-msg" class="muted" style="font-size:12px"></span>
+        </div>`;
+
+      document.getElementById('ll-save').addEventListener('click', async () => {
+        const msg = document.getElementById('ll-save-msg');
+        const payload = {
+          base_url: document.getElementById('ll-url').value.trim(),
+          api_key:  document.getElementById('ll-key').value.trim(),
+          enabled:  document.getElementById('ll-enabled').checked,
+        };
+        try {
+          await fetch('/api/litellm/save-config', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+          });
+          msg.textContent = 'Saved.'; msg.style.color = 'var(--good)';
+        } catch (e) { msg.textContent = String(e); msg.style.color = 'var(--bad)'; }
+      });
+
+      document.getElementById('ll-clear').addEventListener('click', async () => {
+        const btn = document.getElementById('ll-clear');
+        const msg = document.getElementById('ll-clear-msg');
+        btn.disabled = true; btn.textContent = 'Clearing…';
+        try {
+          await fetch('/api/litellm/clear-data', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+          msg.textContent = 'Cleared — re-syncing in background.'; msg.style.color = 'var(--good)';
+        } catch (e) { msg.textContent = String(e); msg.style.color = 'var(--bad)'; }
+        btn.textContent = 'Clear sync data'; btn.disabled = false;
+      });
+
+      document.getElementById('ll-test').addEventListener('click', async () => {
+        const res = document.getElementById('ll-test-result');
+        res.textContent = 'Testing…';
+        try {
+          const r = await fetch('/api/litellm/test', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}).then(x => x.json());
+          const labels = {active: '✓ Connected', invalid_key: '✗ Invalid key (401)', unreachable: '✗ Unreachable', not_configured: 'Not configured', disabled: 'Disabled'};
+          res.textContent = labels[r.state] || r.state;
+          res.style.color = r.state === 'active' ? 'var(--good)' : 'var(--bad)';
+        } catch (e) { res.textContent = String(e); res.style.color = 'var(--bad)'; }
+      });
+    } catch (e) {
+      sec.innerHTML = `<p class="muted" style="font-size:12px">Could not load LiteLLM status: ${e}</p>`;
+    }
+  })();
 
   $('#cm-add').addEventListener('click', async () => {
     const model  = $('#cm-id').value.trim();

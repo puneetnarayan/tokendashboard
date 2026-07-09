@@ -1,0 +1,8 @@
+{
+  "results": [
+    {
+      "date": "2026-07-01",
+      "metrics": {"spend": 0.0177, "prompt_tokens": 111, "completion_tokens": 1711, "total_tokens": 1822, "api_requests": 11}
+    }
+  ]
+}

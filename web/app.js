@@ -36,6 +36,7 @@ const ROUTES = {
   '/prompts':  () => import('/web/routes/prompts.js'),
   '/sessions': () => import('/web/routes/sessions.js'),
   '/projects': () => import('/web/routes/projects.js'),
+  '/litellm':  () => import('/web/routes/litellm.js'),
   '/tips':     () => import('/web/routes/tips.js'),
   '/settings': () => import('/web/routes/settings.js'),
 };
@@ -43,20 +44,22 @@ const ROUTES = {
 function buildTopbar() {
   const wrap = document.createElement('header');
   wrap.className = 'topbar';
+  const mainRoutes = Object.keys(ROUTES).filter(p => p !== '/settings');
   wrap.innerHTML = `
-    <div class="brand">Token Dashboard</div>
+    <img src="/public/Token_Dashboard_logo.png" class="brand-logo" alt="Token Dashboard">
     <nav>
-      ${Object.keys(ROUTES).map(p => `<a href="#${p}" data-route="${p}">${p.slice(1)}</a>`).join('')}
+      ${mainRoutes.map(p => `<a href="#${p}" data-route="${p}">${p.slice(1)}</a>`).join('')}
     </nav>
     <div class="spacer"></div>
     <span class="pill" id="plan-pill">api</span>
     <span class="pill muted" title="Cmd/Ctrl+B blurs sensitive text">⌘B blur</span>
+    <a href="#/settings" data-route="/settings" class="topbar-settings">Settings</a>
   `;
   document.body.prepend(wrap);
 }
 
 function setActiveTab(routeKey) {
-  $$('header.topbar nav a').forEach(a => a.classList.toggle('active', a.dataset.route === routeKey));
+  $$('header.topbar [data-route]').forEach(a => a.classList.toggle('active', a.dataset.route === routeKey));
 }
 
 async function render() {

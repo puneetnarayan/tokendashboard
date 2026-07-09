@@ -1,5 +1,5 @@
 import { api, fmt, state } from '/web/app.js';
-import { barChart, donutChart, stackedBarChart } from '/web/charts.js';
+import { hBarChart, donutChart, stackedBarChart } from '/web/charts.js';
 
 const RANGES = [
   { key: '7d',  label: '7d',  days: 7 },
@@ -157,9 +157,9 @@ async function renderDetail(root, slug) {
           </tbody>
         </table>
       </div>
-      <div class="card">
+      <div class="card" style="align-self:flex-start">
         <h3>Top tools (by call count)</h3>
-        <div id="ch-tools" style="height:280px"></div>
+        <div id="ch-tools"></div>
       </div>
     </div>
 
@@ -229,7 +229,9 @@ async function renderDetail(root, slug) {
   );
 
   const topTools = tools.slice(0, 8);
-  barChart(document.getElementById('ch-tools'), {
+  const toolsEl = document.getElementById('ch-tools');
+  toolsEl.style.height = Math.max(160, topTools.length * 34) + 'px';
+  hBarChart(toolsEl, {
     categories: topTools.map(t => t.tool_name),
     values: topTools.map(t => t.calls),
     color: '#7C5CFF',

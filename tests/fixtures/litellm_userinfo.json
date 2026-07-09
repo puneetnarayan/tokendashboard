@@ -1,0 +1,10 @@
+{
+  "user_id": "user-abc123",
+  "user_alias": "vipin.kumar",
+  "max_budget": 50.0,
+  "spend": 31.20,
+  "budget_duration": "30d",
+  "keys": [
+    {"key_alias": "main", "spend": 31.20, "max_budget": 50.0}
+  ]
+}

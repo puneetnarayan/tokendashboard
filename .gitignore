@@ -5,6 +5,8 @@ __pycache__/
 out/
 node_modules/
 *.db
+*.db-journal
+token-dashboard-config.json
 .superpowers/
 .claude/
 docs/superpowers/

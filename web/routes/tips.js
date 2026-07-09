@@ -12,6 +12,7 @@ export default async function (root) {
         <div class="tip">
           <div class="tip-head">
             <span class="badge" style="flex-shrink:0">${fmt.htmlSafe(t.category)}</span>
+            ${t.savings_usd > 0 ? `<span class="badge" style="background:rgba(63,182,139,.15);color:var(--good);flex-shrink:0">save ~${fmt.usd(t.savings_usd)}/wk</span>` : ''}
             <strong class="blur-sensitive" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1" title="${fmt.htmlSafe(t.title)}">${fmt.htmlSafe(fmt.short(t.title, 120))}</strong>
             <button class="ghost" style="flex-shrink:0" data-key="${fmt.htmlSafe(t.key)}">dismiss</button>
           </div>

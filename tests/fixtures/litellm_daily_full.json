@@ -1,0 +1,29 @@
+{
+  "results": [
+    {
+      "date": "2026-07-01",
+      "metrics": {"spend": 0.0177, "prompt_tokens": 111, "completion_tokens": 1711, "total_tokens": 1822, "api_requests": 11},
+      "breakdown": {
+        "models": {
+          "claude-sonnet-4-6": {"spend": 0.01, "prompt_tokens": 80, "completion_tokens": 1000, "total_tokens": 1080, "api_requests": 7},
+          "claude-haiku-4-5":  {"spend": 0.0077, "prompt_tokens": 31, "completion_tokens": 711, "total_tokens": 742, "api_requests": 4}
+        },
+        "providers": {
+          "anthropic": {"spend": 0.0177, "total_tokens": 1822, "api_requests": 11}
+        }
+      }
+    },
+    {
+      "date": "2026-07-02",
+      "metrics": {"spend": 0.0254, "prompt_tokens": 200, "completion_tokens": 2000, "total_tokens": 2200, "api_requests": 15},
+      "breakdown": {
+        "models": {
+          "claude-sonnet-4-6": {"spend": 0.0254, "prompt_tokens": 200, "completion_tokens": 2000, "total_tokens": 2200, "api_requests": 15}
+        },
+        "providers": {
+          "anthropic": {"spend": 0.0254, "total_tokens": 2200, "api_requests": 15}
+        }
+      }
+    }
+  ]
+}

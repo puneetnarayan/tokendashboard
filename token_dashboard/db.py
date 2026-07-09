@@ -72,6 +72,44 @@ CREATE TABLE IF NOT EXISTS dismissed_tips (
   tip_key       TEXT PRIMARY KEY,
   dismissed_at  REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS litellm_daily (
+  date              TEXT PRIMARY KEY,
+  spend             REAL    NOT NULL DEFAULT 0,
+  prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens      INTEGER NOT NULL DEFAULT 0,
+  api_requests      INTEGER NOT NULL DEFAULT 0,
+  fetched_at        TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS litellm_daily_models (
+  date              TEXT    NOT NULL,
+  model             TEXT    NOT NULL,
+  spend             REAL    NOT NULL DEFAULT 0,
+  prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens      INTEGER NOT NULL DEFAULT 0,
+  api_requests      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (date, model)
+);
+
+CREATE TABLE IF NOT EXISTS litellm_daily_keys (
+  date              TEXT    NOT NULL,
+  key_hash          TEXT    NOT NULL,
+  key_alias         TEXT,
+  spend             REAL    NOT NULL DEFAULT 0,
+  prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens      INTEGER NOT NULL DEFAULT 0,
+  api_requests      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (date, key_hash)
+);
+
+CREATE TABLE IF NOT EXISTS litellm_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+);
 """
 
 
@@ -386,3 +424,69 @@ def model_breakdown(db_path, since=None, until=None, project_slug=None) -> list:
     """
     with connect(db_path) as c:
         return [dict(r) for r in c.execute(sql, (*rargs, *pargs))]
+
+
+def daily_model_breakdown(db_path, since=None, until=None) -> list:
+    """Per day + model token breakdown for local cost estimation."""
+    rng, args = _range_clause(since, until)
+    sql = f"""
+      SELECT substr(timestamp, 1, 10) AS day,
+             COALESCE(model, 'unknown') AS model,
+             COALESCE(SUM(input_tokens),0)            AS input_tokens,
+             COALESCE(SUM(output_tokens),0)           AS output_tokens,
+             COALESCE(SUM(cache_read_tokens),0)       AS cache_read_tokens,
+             COALESCE(SUM(cache_create_5m_tokens),0)  AS cache_create_5m_tokens,
+             COALESCE(SUM(cache_create_1h_tokens),0)  AS cache_create_1h_tokens
+        FROM messages
+       WHERE type = 'assistant' AND timestamp IS NOT NULL {rng}
+       GROUP BY day, model
+       ORDER BY day ASC
+    """
+    with connect(db_path) as c:
+        return [dict(r) for r in c.execute(sql, args)]
+
+
+def litellm_meta_all(db_path) -> dict:
+    """Return all litellm_meta rows as a plain dict."""
+    with connect(db_path) as c:
+        rows = c.execute("SELECT key, value FROM litellm_meta").fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def litellm_daily_raw(db_path, since=None, until=None) -> list:
+    """Raw litellm_daily rows in the given date range."""
+    where, args = [], []
+    if since:
+        where.append("date >= ?"); args.append(since[:10])
+    if until:
+        where.append("date < ?"); args.append(until[:10])
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = f"SELECT date, spend, prompt_tokens, completion_tokens, total_tokens, api_requests FROM litellm_daily {clause} ORDER BY date ASC"
+    with connect(db_path) as c:
+        return [dict(r) for r in c.execute(sql, args)]
+
+
+def litellm_models_raw(db_path, since=None, until=None) -> list:
+    """litellm_daily_models rows in the given date range."""
+    where, args = [], []
+    if since:
+        where.append("date >= ?"); args.append(since[:10])
+    if until:
+        where.append("date < ?"); args.append(until[:10])
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = f"SELECT date, model, spend, prompt_tokens, completion_tokens, total_tokens, api_requests FROM litellm_daily_models {clause} ORDER BY date ASC, spend DESC"
+    with connect(db_path) as c:
+        return [dict(r) for r in c.execute(sql, args)]
+
+
+def litellm_keys_raw(db_path, since=None, until=None) -> list:
+    """litellm_daily_keys rows in the given date range."""
+    where, args = [], []
+    if since:
+        where.append("date >= ?"); args.append(since[:10])
+    if until:
+        where.append("date < ?"); args.append(until[:10])
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = f"SELECT date, key_hash, key_alias, spend FROM litellm_daily_keys {clause} ORDER BY date ASC, spend DESC"
+    with connect(db_path) as c:
+        return [dict(r) for r in c.execute(sql, args)]

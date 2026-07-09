@@ -68,6 +68,29 @@ export function barChart(el, { categories, values, color }) {
   return c;
 }
 
+export function hBarChart(el, { categories, values, color }) {
+  const c = mount(el);
+  c.setOption({
+    ...BASE,
+    grid: { left: 12, right: 16, top: 8, bottom: 8, containLabel: true },
+    tooltip: { ...TOOLTIP, axisPointer: { type: 'shadow' } },
+    xAxis: { ...Y_AXIS, type: 'value' },
+    yAxis: {
+      ...X_AXIS, type: 'category',
+      data: [...categories].reverse(),
+      axisLabel: { ...X_AXIS.axisLabel, width: 120, overflow: 'truncate' },
+    },
+    series: [{
+      type: 'bar', data: [...values].reverse(),
+      itemStyle: { color: color || PALETTE[0], borderRadius: [0, 4, 4, 0] },
+      barMaxWidth: 20,
+      label: { show: true, position: 'right', color: '#8B98A6', fontSize: 11,
+               formatter: p => p.value.toLocaleString() },
+    }],
+  });
+  return c;
+}
+
 export function stackedBarChart(el, { categories, series, formatter }) {
   const c = mount(el);
   c.setOption({
@@ -164,6 +187,56 @@ export function donutChart(el, data) {
       labelLine: { show: false },
       data,
     }],
+  });
+  return c;
+}
+
+export function mixedBarLineChart(el, { categories, bar, line, barLabel, lineLabel, formatter }) {
+  // bar series = actual (bars), line series = estimate (line overlay), shared tooltip
+  const c = mount(el);
+  const fmt = formatter || (v => '$' + Number(v).toFixed(4));
+  c.setOption({
+    ...BASE,
+    tooltip: {
+      ...TOOLTIP,
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: params => {
+        const date = params[0]?.axisValue || '';
+        return params.map(p =>
+          `${p.marker} ${p.seriesName}: ${fmt(p.value)}`
+        ).join('<br>');
+      },
+    },
+    legend: {
+      textStyle: { color: '#8B98A6' }, top: 0, right: 0,
+      icon: 'roundRect', itemWidth: 8, itemHeight: 8,
+    },
+    xAxis: {
+      ...X_AXIS, type: 'category', data: categories,
+      axisLabel: { ...X_AXIS.axisLabel, interval: categories.length > 20 ? 'auto' : 0, rotate: categories.length > 12 ? 45 : 0 },
+    },
+    yAxis: [
+      { ...Y_AXIS, type: 'value', name: '' },
+    ],
+    series: [
+      {
+        name: barLabel || 'actual',
+        type: 'bar',
+        data: bar,
+        itemStyle: { color: '#4A9EFF', borderRadius: [3, 3, 0, 0] },
+        barMaxWidth: 20,
+      },
+      {
+        name: lineLabel || 'estimate',
+        type: 'line',
+        data: line,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { color: '#E8A23B', width: 2, type: 'dashed' },
+        itemStyle: { color: '#E8A23B' },
+      },
+    ],
   });
   return c;
 }

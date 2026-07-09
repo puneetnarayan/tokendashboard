@@ -55,12 +55,15 @@ def cache_discipline_tips(db_path, today_iso: Optional[str] = None) -> List[dict
                 key = _key("cache", row["project_slug"])
                 if _is_dismissed(db_path, key):
                     continue
+                potential_cr = total * 0.40 - (row["cr"] or 0)
+                savings_usd = round(max(0, potential_cr) * 2.70 / 1_000_000, 2)
                 out.append({
                     "key": key,
                     "category": "cache",
                     "title": f"Low cache hit rate in {row['project_slug']}",
                     "body": f"Cache hit rate is {hit*100:.0f}% over the last 7 days. Sessions that restart context frequently rebuild cache. Consider longer-lived sessions or fewer context resets.",
                     "scope": row["project_slug"],
+                    "savings_usd": savings_usd,
                 })
     return out
 
@@ -134,6 +137,7 @@ def right_size_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
         "title": f"{row['n']} short Opus turns might fit on Sonnet",
         "body": f"Opus turns under 500 output tokens cost ~${api_opus:.2f} in the last 7 days. Sonnet would have cost ~${api_sonnet:.2f} (savings ~${savings:.2f}).",
         "scope": "opus-short-turns-7d",
+        "savings_usd": round(savings, 2),
     }]
 
 
@@ -150,11 +154,13 @@ def outlier_tips(db_path, today_iso: Optional[str] = None) -> List[dict]:
         if big and (big["n"] or 0) >= 5:
             key = _key("tool-bloat", "result-50k+")
             if not _is_dismissed(db_path, key):
+                savings_usd = round(big["n"] * max(0, (big["avg_t"] or 0) - 5000) * 3.0 / 1_000_000, 2)
                 out.append({
                     "key": key, "category": "tool-bloat",
                     "title": f"{big['n']} tool results over 50k tokens this week",
                     "body": f"Average size is {int(big['avg_t']):,} tokens. Pipe long Bash output to head/tail and ask for narrower file reads.",
                     "scope": "result-50k+",
+                    "savings_usd": savings_usd,
                 })
         for row in c.execute("""
           SELECT agent_id, COUNT(*) AS n,

@@ -1,5 +1,5 @@
 import { api, fmt, state } from '/web/app.js';
-import { barChart, donutChart, groupedBarChart, stackedBarChart } from '/web/charts.js';
+import { hBarChart, donutChart, groupedBarChart, stackedBarChart } from '/web/charts.js';
 
 const RANGES = [
   { key: '7d',  label: '7d',  days: 7 },
@@ -48,6 +48,49 @@ export default async function (root) {
     (totals.cache_create_5m_tokens || 0) +
     (totals.cache_create_1h_tokens || 0);
 
+  const cacheTotal = (totals.cache_read_tokens || 0) + (totals.input_tokens || 0) + cacheCreate;
+  const cacheHit   = cacheTotal > 0 ? (totals.cache_read_tokens || 0) / cacheTotal : null;
+
+  // delta sub-line for cost KPI
+  const costDelta = (() => {
+    const prev = totals.prev;
+    if (!prev || !prev.cost_usd) return '';
+    const curr = totals.cost_usd || 0;
+    if (prev.cost_usd === 0) return '';
+    const pct = (curr - prev.cost_usd) / prev.cost_usd * 100;
+    const dir = pct >= 0 ? '↑' : '↓';
+    const cls = pct >= 0 ? 'bad' : 'good';
+    return `<div class="sub" style="color:var(--${cls})">${dir}${Math.abs(pct).toFixed(0)}% vs prev</div>`;
+  })();
+
+  // plain-English insight summary
+  const insightHtml = (() => {
+    const costStr = fmt.usd(totals.cost_usd || 0);
+    let deltaStr = '';
+    if (totals.prev && totals.prev.cost_usd > 0) {
+      const pct = ((totals.cost_usd || 0) - totals.prev.cost_usd) / totals.prev.cost_usd * 100;
+      const dir = pct >= 0 ? '↑' : '↓';
+      const cls = pct >= 0 ? 'bad' : 'good';
+      deltaStr = ` <span style="color:var(--${cls})">(${dir}${Math.abs(pct).toFixed(0)}% vs prior ${range.days}d)</span>`;
+    }
+    const timeLabel = range.days ? `last ${range.days} days` : 'all time';
+    const topProject = projects.length ? fmt.htmlSafe(projects[0].project_name || projects[0].project_slug) : null;
+    const topStr = topProject ? ` Top project: <strong>${topProject}</strong>.` : '';
+    let cacheStr = '';
+    if (cacheHit !== null) {
+      const cpct = (cacheHit * 100).toFixed(0) + '%';
+      const cls = cacheHit >= 0.6 ? 'good' : cacheHit >= 0.4 ? 'warn' : 'bad';
+      const label = cacheHit >= 0.6 ? 'healthy' : cacheHit >= 0.4 ? 'room to improve' : 'low — check for context resets';
+      cacheStr = ` Cache reuse: <span style="color:var(--${cls})">${cpct} (${label})</span>.`;
+    }
+    const opusTok = byModel.filter(m => (m.model || '').toLowerCase().includes('opus'))
+      .reduce((s, m) => s + (m.input_tokens||0) + (m.output_tokens||0) + (m.cache_create_5m_tokens||0) + (m.cache_create_1h_tokens||0), 0);
+    const totalBillable = byModel.reduce((s, m) => s + (m.input_tokens||0) + (m.output_tokens||0) + (m.cache_create_5m_tokens||0) + (m.cache_create_1h_tokens||0), 0);
+    const mixStr = totalBillable > 0 && opusTok / totalBillable > 0.8
+      ? ' Most usage is on Opus — consider Sonnet for lighter tasks to cut costs.' : '';
+    return `<div class="card" style="margin-bottom:16px"><p style="margin:0;font-size:13px;line-height:1.7">Estimated spend ${timeLabel}: <strong>${costStr}</strong>${deltaStr}.${topStr}${cacheStr}${mixStr}</p></div>`;
+  })();
+
   const kpi = (label, compactVal, fullVal, cls = '') => `
     <div class="card kpi ${cls}">
       <div class="label">${label}</div>
@@ -67,18 +110,21 @@ export default async function (root) {
       ${rangeTabs}
     </div>
 
+    ${insightHtml}
+
     <div class="row cols-8">
+      <div class="card kpi cost">
+        <div class="label">Est. cost</div>
+        <div class="value" title="${fmt.usd(totals.cost_usd)}">${fmt.usd(totals.cost_usd)}</div>
+        ${costDelta}
+        ${planSubtitle()}
+      </div>
       ${kpi('Sessions',     fmt.int(totals.sessions),       fmt.int(totals.sessions))}
       ${kpi('Turns',        fmt.int(totals.turns),          fmt.int(totals.turns))}
       ${kpi('Input',        fmt.compact(totals.input_tokens),       fmt.int(totals.input_tokens) + ' tokens')}
       ${kpi('Output',       fmt.compact(totals.output_tokens),      fmt.int(totals.output_tokens) + ' tokens')}
       ${kpi('Cache read',   fmt.compact(totals.cache_read_tokens),  fmt.int(totals.cache_read_tokens) + ' tokens')}
-      ${kpi('Cache create', fmt.compact(cacheCreate),               fmt.int(cacheCreate) + ' tokens')}
-      <div class="card kpi cost">
-        <div class="label">Est. cost</div>
-        <div class="value" title="${fmt.usd(totals.cost_usd)}">${fmt.usd(totals.cost_usd)}</div>
-        ${planSubtitle()}
-      </div>
+      ${kpi('Cache hit',    cacheHit != null ? fmt.pct(cacheHit) : '—', cacheHit != null ? (cacheHit * 100).toFixed(1) + '%' : '—', cacheHit != null && cacheHit < 0.4 ? 'warn' : '')}
       ${rtkKpi(rtk)}
     </div>
 
@@ -118,7 +164,7 @@ export default async function (root) {
     </div>
 
     <div class="row cols-2" style="margin-top:16px">
-      <div class="card"><h3>Top tools (by call count)</h3><div id="ch-tools" style="height:320px"></div></div>
+      <div class="card" style="align-self:flex-start"><h3>Top tools (by call count)</h3><div id="ch-tools"></div></div>
       <div class="card">
         <h3 style="display:flex;align-items:center"><span>Recent sessions</span><span class="spacer"></span><a href="#/sessions" style="font-weight:400;font-size:12px">all →</a></h3>
         <table>
@@ -181,13 +227,42 @@ export default async function (root) {
     ],
   });
 
-  // top tools
+  // top tools — horizontal bar, height scales to item count
   const topTools = tools.slice(0, 8);
-  barChart(document.getElementById('ch-tools'), {
+  const toolsEl = document.getElementById('ch-tools');
+  toolsEl.style.height = Math.max(160, topTools.length * 34) + 'px';
+  hBarChart(toolsEl, {
     categories: topTools.map(t => t.tool_name),
     values: topTools.map(t => t.calls),
     color: '#7C5CFF',
   });
+
+  // LiteLLM actual spend card — appended if integration is active
+  try {
+    const llStatus = await api('/api/litellm/status');
+    if (llStatus.state === 'active') {
+      const llSummary = await api(`/api/litellm/summary?range=${range.key}`);
+      const kpiRow = root.querySelector('.row.cols-8') || root.querySelector('.row');
+      if (kpiRow) {
+        const delta = llSummary.delta ?? 0;
+        const deltaAbs = Math.abs(delta);
+        const deltaSpend = llSummary.spend || 0;
+        const isNeutral = deltaSpend === 0 || deltaAbs / deltaSpend < 0.1;
+        const card = document.createElement('div');
+        card.className = 'card kpi';
+        card.style.cursor = 'pointer';
+        card.title = 'LiteLLM actual spend — click to see details';
+        card.innerHTML = `
+          <div class="label">Actual spend</div>
+          <div class="value">${fmt.usd(llSummary.spend)}</div>
+          <div class="sub" style="color:var(--${isNeutral ? 'muted' : 'warn'})">
+            ${delta >= 0 ? '+' : ''}${fmt.usd(delta)} vs estimate
+          </div>`;
+        card.addEventListener('click', () => { location.hash = '#/litellm'; });
+        kpiRow.appendChild(card);
+      }
+    }
+  } catch (_) {}
 }
 
 function planSubtitle() {

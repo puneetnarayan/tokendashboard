@@ -1,0 +1,14 @@
+{
+  "results": [
+    "not a dict",
+    {
+      "date": "2026-07-02",
+      "metrics": {"spend": 0.0254, "prompt_tokens": 200, "completion_tokens": 2000, "total_tokens": 2200, "api_requests": 15},
+      "breakdown": {
+        "models": {
+          "claude-sonnet-4-6": {"spend": 0.0254, "prompt_tokens": 200, "completion_tokens": 2000, "total_tokens": 2200, "api_requests": 15}
+        }
+      }
+    }
+  ]
+}
