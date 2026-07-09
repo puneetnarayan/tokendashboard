@@ -141,6 +141,26 @@ class ServerTests(unittest.TestCase):
             except urllib.error.HTTPError as e:
                 self.assertEqual(e.code, 503)
 
+    def test_plugins_json(self):
+        body = json.loads(self._get("/api/plugins"))
+        self.assertIsInstance(body, list)
+
+    def test_mcp_json(self):
+        body = json.loads(self._get("/api/mcp"))
+        self.assertIsInstance(body, list)
+
+    def test_hooks_json(self):
+        body = json.loads(self._get("/api/hooks"))
+        self.assertIsInstance(body, list)
+
+    def test_commands_json(self):
+        body = json.loads(self._get("/api/commands"))
+        self.assertIsInstance(body, list)
+
+    def test_agents_json(self):
+        body = json.loads(self._get("/api/agents"))
+        self.assertIsInstance(body, list)
+
 
 if __name__ == "__main__":
     unittest.main()

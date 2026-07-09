@@ -23,6 +23,9 @@ from .quota import get_quota_config, set_quota_config, rolling_window_usage
 from .skill_tokens import skill_cost_proxy
 from .alerts import evaluate_alerts
 from .plan_usage import get_plan_usage, reset_token_store, PlanUsageError, NoCredentialsError
+from .plugins import cached_plugins
+from .mcp_catalog import scan_mcp
+from .hooks_catalog import scan_hooks, scan_commands, scan_agents
 
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -155,6 +158,24 @@ def build_handler(db_path: str, projects_dir: str):
                 })
             if path == "/api/skills_cost":
                 return _send_json(self, skill_cost_proxy(db_path, since, until))
+            if path == "/api/plugins":
+                return _send_json(self, cached_plugins())
+            if path == "/api/mcp":
+                rows = scan_mcp()
+                tools = tool_token_breakdown(db_path, since, until)
+                for r in rows:
+                    norm = r["name"].lower().replace(" ", "_")
+                    r["usage_calls"] = sum(
+                        t["calls"] for t in tools
+                        if t["tool_name"].startswith("mcp__") and norm in t["tool_name"].lower()
+                    ) or None
+                return _send_json(self, rows)
+            if path == "/api/hooks":
+                return _send_json(self, scan_hooks())
+            if path == "/api/commands":
+                return _send_json(self, scan_commands())
+            if path == "/api/agents":
+                return _send_json(self, scan_agents())
             if path == "/api/alerts":
                 return _send_json(self, evaluate_alerts(db_path))
             if path == "/api/plan_usage":

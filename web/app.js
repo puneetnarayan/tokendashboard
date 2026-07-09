@@ -21,6 +21,7 @@ export const fmt = {
   },
   modelShort: m => (m || '').replace('claude-', ''),
   ts: t => (t || '').slice(0, 16).replace('T', ' '),
+  editorLink: p => p ? 'vscode://file/' + p.split('/').map(encodeURIComponent).join('/') : null,
 };
 
 export async function api(path, opts) {
@@ -38,6 +39,9 @@ const ROUTES = {
   '/sessions': () => import('/web/routes/sessions.js'),
   '/projects': () => import('/web/routes/projects.js'),
   '/skills':   () => import('/web/routes/skills.js'),
+  '/plugins':  () => import('/web/routes/plugins.js'),
+  '/mcp':      () => import('/web/routes/mcp.js'),
+  '/hooks':    () => import('/web/routes/hooks.js'),
   '/tips':     () => import('/web/routes/tips.js'),
   '/settings': () => import('/web/routes/settings.js'),
 };
