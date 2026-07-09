@@ -84,6 +84,15 @@ header.topbar {
 .nav-group-menu a:hover { color: var(--text); background: var(--panel); text-decoration: none; }
 .nav-group-menu a.active { color: var(--text); background: var(--panel); }
 
+/* Overview: compact plan-usage rows. NOT the same as .usage-row (used by the
+   full /quota page) — that one has a fixed 240px label column sized for the
+   880px-wide .usage-panel, which breaks inside a half-width Overview card. */
+.mini-usage-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.mini-usage-row .label { width: 132px; flex-shrink: 0; font-size: 12px; color: var(--text); }
+.mini-usage-row .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.mini-usage-row .bar-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.4s; }
+.mini-usage-row .pct { width: 60px; flex-shrink: 0; text-align: right; font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
 .topbar .spacer { margin-left: auto; }
 .topbar .pill {
   padding: 4px 10px; border-radius: 6px;

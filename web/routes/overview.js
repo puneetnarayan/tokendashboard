@@ -30,17 +30,62 @@ function withSince(url, since) {
   return url + (url.includes('?') ? '&' : '?') + 'since=' + encodeURIComponent(since);
 }
 
+async function fetchPlanUsage() {
+  try {
+    const r = await fetch('/api/plan_usage');
+    if (!r.ok) return null;
+    return r.json();
+  } catch {
+    return null;
+  }
+}
+
+function planUsageCard(planUsage) {
+  const usage = planUsage?.data?.usage;
+  const linkHtml = `<a href="#/quota" style="font-weight:400;font-size:12px">view all →</a>`;
+  const header = `<h3 style="display:flex;align-items:center"><span>Plan usage</span><span class="spacer"></span>${linkHtml}</h3>`;
+  if (!usage) {
+    return `
+      <div class="card">
+        ${header}
+        <p class="muted" style="font-size:12px">Couldn't load plan usage — check the Quota tab for details.</p>
+      </div>`;
+  }
+  const rows = [
+    { label: 'Current session', pct: usage.five_hour?.utilization },
+    { label: 'Weekly (all models)', pct: usage.seven_day?.utilization },
+  ].filter(r => r.pct != null);
+  if (!rows.length) {
+    return `
+      <div class="card">
+        ${header}
+        <p class="muted" style="font-size:12px">No usage data yet.</p>
+      </div>`;
+  }
+  return `
+    <div class="card">
+      ${header}
+      ${rows.map(r => `
+        <div class="mini-usage-row">
+          <div class="label">${fmt.htmlSafe(r.label)}</div>
+          <div class="bar"><div class="bar-fill" style="width:${Math.min(100, Math.max(0, r.pct)).toFixed(1)}%"></div></div>
+          <div class="pct">${Math.round(r.pct)}% used</div>
+        </div>`).join('')}
+    </div>`;
+}
+
 export default async function (root) {
   const range = readRange();
   const since = sinceIso(range);
 
-  const [totals, projects, sessions, tools, daily, byModel] = await Promise.all([
+  const [totals, projects, sessions, tools, daily, byModel, planUsage] = await Promise.all([
     api(withSince('/api/overview', since)),
     api(withSince('/api/projects', since)),
     api(withSince('/api/sessions?limit=10', since)),
     api(withSince('/api/tools', since)),
     api(withSince('/api/daily', since)),
     api(withSince('/api/by-model', since)),
+    fetchPlanUsage(),
   ]);
 
   const cacheCreate =
@@ -116,7 +161,6 @@ export default async function (root) {
     </div>
 
     <div class="row cols-2" style="margin-top:16px">
-      <div class="card"><h3>Top tools (by call count)</h3><div id="ch-tools" style="height:320px"></div></div>
       <div class="card">
         <h3 style="display:flex;align-items:center"><span>Recent sessions</span><span class="spacer"></span><a href="#/sessions" style="font-weight:400;font-size:12px">all →</a></h3>
         <table>
@@ -131,6 +175,12 @@ export default async function (root) {
           </tbody>
         </table>
       </div>
+      ${planUsageCard(planUsage)}
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h3>Top tools (by call count)</h3>
+      <div id="ch-tools" style="height:320px"></div>
     </div>
   `;
 
