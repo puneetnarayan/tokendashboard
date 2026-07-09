@@ -46,23 +46,89 @@ const ROUTES = {
   '/settings': () => import('/web/routes/settings.js'),
 };
 
+const NAV_GROUPS = [
+  { key: 'register', label: 'Register', routes: ['/skills', '/plugins', '/mcp', '/hooks'] },
+];
+
+// Flattens ROUTES into an ordered render list: standalone links stay as-is;
+// the first route that belongs to a group is replaced by the group's
+// dropdown trigger (so the trigger renders in that route's original
+// position — Register ends up between Projects and Tips without hardcoding
+// an index).
+function navItems() {
+  const groupByRoute = new Map();
+  NAV_GROUPS.forEach(g => g.routes.forEach(r => groupByRoute.set(r, g)));
+  const seenGroups = new Set();
+  const items = [];
+  Object.keys(ROUTES).forEach(path => {
+    const group = groupByRoute.get(path);
+    if (group) {
+      if (seenGroups.has(group.key)) return;
+      seenGroups.add(group.key);
+      items.push({ type: 'group', group });
+    } else {
+      items.push({ type: 'link', path });
+    }
+  });
+  return items;
+}
+
 function buildTopbar() {
   const wrap = document.createElement('header');
   wrap.className = 'topbar';
+  const navHtml = navItems().map(item => {
+    if (item.type === 'link') {
+      return `<a href="#${item.path}" data-route="${item.path}">${item.path.slice(1)}</a>`;
+    }
+    const g = item.group;
+    return `
+      <div class="nav-group" data-group="${g.key}">
+        <button type="button" class="nav-group-trigger" data-group-trigger="${g.key}" aria-expanded="false">${g.label} <span class="caret">▾</span></button>
+        <div class="nav-group-menu" data-group-menu="${g.key}" hidden>
+          ${g.routes.map(p => `<a href="#${p}" data-route="${p}">${p.slice(1)}</a>`).join('')}
+        </div>
+      </div>`;
+  }).join('');
   wrap.innerHTML = `
     <div class="brand">Token Dashboard</div>
-    <nav>
-      ${Object.keys(ROUTES).map(p => `<a href="#${p}" data-route="${p}">${p.slice(1)}</a>`).join('')}
-    </nav>
+    <nav>${navHtml}</nav>
     <div class="spacer"></div>
     <span class="pill" id="plan-pill">api</span>
     <span class="pill muted" title="Cmd/Ctrl+B blurs sensitive text">⌘B blur</span>
   `;
   document.body.prepend(wrap);
+  wireNavGroups(wrap);
+}
+
+function wireNavGroups(topbar) {
+  function closeAll() {
+    $$('.nav-group-menu', topbar).forEach(m => { m.hidden = true; });
+    $$('.nav-group-trigger', topbar).forEach(t => t.setAttribute('aria-expanded', 'false'));
+  }
+  $$('.nav-group-trigger', topbar).forEach(trigger => {
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const key = trigger.dataset.groupTrigger;
+      const menu = topbar.querySelector(`.nav-group-menu[data-group-menu="${key}"]`);
+      const isOpen = !menu.hidden;
+      closeAll();
+      if (!isOpen) {
+        menu.hidden = false;
+        trigger.setAttribute('aria-expanded', 'true');
+      }
+    });
+  });
+  $$('.nav-group-menu a', topbar).forEach(a => a.addEventListener('click', closeAll));
+  document.addEventListener('click', closeAll);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
 }
 
 function setActiveTab(routeKey) {
   $$('header.topbar nav a').forEach(a => a.classList.toggle('active', a.dataset.route === routeKey));
+  $$('header.topbar .nav-group-trigger').forEach(trigger => {
+    const group = NAV_GROUPS.find(g => g.key === trigger.dataset.groupTrigger);
+    trigger.classList.toggle('active', !!group && group.routes.includes(routeKey));
+  });
 }
 
 async function render() {

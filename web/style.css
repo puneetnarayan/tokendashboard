@@ -56,6 +56,34 @@ header.topbar {
 .topbar nav a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
 .topbar nav a.active { color: var(--text); background: var(--panel-2); }
 
+.nav-group { position: relative; display: inline-flex; }
+.nav-group-trigger {
+  font: inherit; font-family: var(--sans); cursor: pointer;
+  border: none; background: none;
+  padding: 5px 10px; border-radius: 6px;
+  color: var(--muted); font-size: 13px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 3px;
+  transition: color 120ms, background 120ms;
+}
+.nav-group-trigger:hover { color: var(--text); background: var(--panel-2); }
+.nav-group-trigger.active { color: var(--text); background: var(--panel-2); }
+.nav-group-trigger .caret { font-size: 10px; color: var(--muted-2); }
+.nav-group-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 20;
+  display: flex; flex-direction: column; min-width: 140px;
+  background: var(--panel-2); border: 1px solid var(--border-2);
+  border-radius: 8px; padding: 4px; gap: 1px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.nav-group-menu[hidden] { display: none; }
+.nav-group-menu a {
+  padding: 6px 10px; border-radius: 6px;
+  color: var(--muted); font-size: 13px; font-weight: 500;
+  text-transform: capitalize;
+}
+.nav-group-menu a:hover { color: var(--text); background: var(--panel); text-decoration: none; }
+.nav-group-menu a.active { color: var(--text); background: var(--panel); }
+
 .topbar .spacer { margin-left: auto; }
 .topbar .pill {
   padding: 4px 10px; border-radius: 6px;
