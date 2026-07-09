@@ -69,6 +69,26 @@ class CatalogTests(unittest.TestCase):
         cat = scan_catalog([self.tmp / "skills"])
         self.assertNotIn("never-installed", cat)
 
+    def test_description_parsed_from_frontmatter(self):
+        body = (
+            "---\n"
+            "name: frontend-design\n"
+            "description: Guidance for distinctive, intentional visual design.\n"
+            "---\n"
+            "# Frontend Design\nBody text.\n"
+        )
+        _write(self.tmp / "skills" / "frontend-design" / "SKILL.md", body)
+        cat = scan_catalog([self.tmp / "skills"])
+        self.assertEqual(
+            cat["frontend-design"]["description"],
+            "Guidance for distinctive, intentional visual design.",
+        )
+
+    def test_description_missing_frontmatter_is_empty_string(self):
+        _write(self.tmp / "skills" / "no-frontmatter" / "SKILL.md", "just text, no frontmatter")
+        cat = scan_catalog([self.tmp / "skills"])
+        self.assertEqual(cat["no-frontmatter"]["description"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

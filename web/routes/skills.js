@@ -72,7 +72,10 @@ export default async function (root) {
         <tbody>
           ${skills.map(s => `
             <tr>
-              <td><span class="badge">${fmt.htmlSafe(s.skill)}</span></td>
+              <td>
+                <span class="badge">${fmt.htmlSafe(s.skill)}</span>
+                ${s.description ? `<div class="muted" style="font-size:11px;margin-top:2px">${fmt.htmlSafe(s.description)}</div>` : ''}
+              </td>
               <td class="num">${fmt.int(s.invocations)}</td>
               <td class="num">${s.chars == null ? '<span class="muted">—</span>' : fmt.int(Math.floor(s.chars / 4))}</td>
               <td class="num">${s.proxy_tokens == null ? '<span class="muted">—</span>' : fmt.int(s.proxy_tokens)}</td>

@@ -67,6 +67,31 @@ def _slugs_for(skill_md: Path) -> list[str]:
     return sorted(slugs)
 
 
+def _parse_frontmatter(md_path: Path) -> dict:
+    """Extract name/description from SKILL.md's YAML frontmatter — stdlib only,
+    no PyYAML. SKILL.md frontmatter is always flat single-line key: value pairs,
+    so a full YAML parser is unneeded (YAGNI)."""
+    try:
+        text = md_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return {}
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}
+    out = {}
+    for line in text[3:end].splitlines():
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key in ("name", "description") and val:
+            out[key] = val
+    return out
+
+
 def scan_catalog(roots=None) -> Dict[str, dict]:
     """Return {slug: {path, chars, tokens}} for every SKILL.md found.
 
@@ -83,7 +108,10 @@ def scan_catalog(roots=None) -> Dict[str, dict]:
                 chars = md.stat().st_size
             except OSError:
                 continue
-            entry = {"path": str(md), "chars": chars, "tokens": chars // 4}
+            entry = {
+                "path": str(md), "chars": chars, "tokens": chars // 4,
+                "description": _parse_frontmatter(md).get("description", ""),
+            }
             for slug in _slugs_for(md):
                 prev = catalog.get(slug)
                 if prev is None or len(md.parts) < len(Path(prev["path"]).parts):

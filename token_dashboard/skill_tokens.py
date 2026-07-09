@@ -24,6 +24,7 @@ def skill_cost_proxy(
                 "proxy_tokens": None,
                 "chars": None,
                 "catalog_missing": True,
+                "description": "",
             })
         else:
             out.append({
@@ -31,6 +32,7 @@ def skill_cost_proxy(
                 "proxy_tokens": r["invocations"] * info["tokens"],
                 "chars": info["chars"],
                 "catalog_missing": False,
+                "description": info.get("description", ""),
             })
     # Sort: known skills by proxy_tokens desc, unknown last (stable).
     out.sort(key=lambda x: (x["proxy_tokens"] is None, -(x["proxy_tokens"] or 0)))

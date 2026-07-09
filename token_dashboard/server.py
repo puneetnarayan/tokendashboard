@@ -130,6 +130,7 @@ def build_handler(db_path: str, projects_dir: str):
                 for r in rows:
                     info = catalog.get(r["skill"])
                     r["tokens_per_call"] = info["tokens"] if info else None
+                    r["description"] = info["description"] if info else ""
                 return _send_json(self, rows)
             if path == "/api/by-model":
                 rows = model_breakdown(db_path, since, until)
