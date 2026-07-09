@@ -8,8 +8,10 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
 from token_dashboard.db import init_db
+from token_dashboard.plan_usage import NoCredentialsError
 from token_dashboard.server import build_handler
 
 
@@ -129,12 +131,15 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(e.code, 400)
 
     def test_plan_usage_returns_503_when_no_creds(self):
-        # No credentials available in test env — expect 503
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/plan_usage")
-            self.fail("expected HTTPError")
-        except urllib.error.HTTPError as e:
-            self.assertIn(e.code, (502, 503))
+        # Force the no-credentials path deterministically — the machine
+        # running this test may have real credentials on disk, which would
+        # otherwise make this test's outcome depend on local environment.
+        with patch("token_dashboard.server.get_plan_usage", side_effect=NoCredentialsError("no creds")):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/plan_usage")
+                self.fail("expected HTTPError")
+            except urllib.error.HTTPError as e:
+                self.assertEqual(e.code, 503)
 
 
 if __name__ == "__main__":
