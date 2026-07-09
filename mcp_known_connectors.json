@@ -1,0 +1,9 @@
+{
+  "connectors": [
+    {"name": "Gmail", "description": "Read/search mail, drafts, labels.", "status": "connected"},
+    {"name": "Google Calendar", "description": "Events, scheduling, calendars.", "status": "connected"},
+    {"name": "Notion", "description": "Workspace pages and databases.", "status": "connected"},
+    {"name": "Google Drive", "description": "Search and read files.", "status": "connected"},
+    {"name": "Supabase", "description": "Management API — projects, orgs, functions.", "status": "needs_auth"}
+  ]
+}
