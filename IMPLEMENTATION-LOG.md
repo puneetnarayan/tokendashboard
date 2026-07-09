@@ -13,3 +13,9 @@ Patched `token_dashboard.server.get_plan_usage` to raise `NoCredentialsError` di
 
 ### Task 1 — Skills description field
 Sonnet subagent (pilot task, per GOAL.md cost-awareness rule). Added `_parse_frontmatter()` to `skills.py`, wired `description` into `scan_catalog()`. Found and fixed a deviation from the plan text: the live Skills UI reads `/api/skills_cost` (→ `skill_tokens.skill_cost_proxy`), not `/api/skills`, so `description` had to be plumbed through `skill_tokens.py` too (using `.get()` there to stay compatible with existing fake-catalog tests) — also added to `/api/skills` for consistency. Reviewed diff against plan, matches exactly plus the justified deviation. 102/102 tests green. Committed as `b933ca7`.
+
+### Task 2 — Plugins gallery
+Sonnet subagent, ran in parallel with Task 3 (disjoint files). Created `token_dashboard/plugins.py` (`scan_plugins`/`cached_plugins`, TTL 60s) + `web/routes/plugins.js`, matches plan code exactly. Sanity-checked against real `~/.claude/plugins/installed_plugins.json` shape — `installPath` field present as expected. 3 new tests, full suite green (108). Committed as `4741b58`.
+
+### Task 3 — MCP gallery
+Sonnet subagent, ran in parallel with Task 2. Created `token_dashboard/mcp_catalog.py` (local `~/.claude.json` scan + hand-maintained `mcp_known_connectors.json` for account-level connectors) + `web/routes/mcp.js`, matches plan code exactly. Sanity-checked against real `~/.claude.json` — has `projects` key as expected. 3 new tests, full suite green (108). Committed as `feb4a0b`.
