@@ -2,6 +2,9 @@ import { api, fmt, state } from '/web/app.js';
 import { barChart, donutChart, groupedBarChart, stackedBarChart } from '/web/charts.js';
 
 const RANGES = [
+  { key: '1d',  label: '1d',  days: 1 },
+  { key: '2d',  label: '2d',  days: 2 },
+  { key: '3d',  label: '3d',  days: 3 },
   { key: '7d',  label: '7d',  days: 7 },
   { key: '30d', label: '30d', days: 30 },
   { key: '90d', label: '90d', days: 90 },
